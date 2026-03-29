@@ -1,4 +1,15 @@
+# Core dependencies
 python-telegram-bot==21.10
 httpx==0.28.1
 beautifulsoup4==4.12.3
 python-dotenv==1.0.1
+
+# Optional: for Anthropic API engine (ANALYSIS_ENGINE=anthropic)
+# anthropic>=0.52.0
+
+# Optional: for OpenAI API engine (ANALYSIS_ENGINE=openai)
+# openai>=1.30.0
+
+# Development
+# pytest>=8.0
+# pytest-asyncio>=0.23

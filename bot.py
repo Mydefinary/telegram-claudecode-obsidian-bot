@@ -17,7 +17,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER
+from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT
 from scraper import extract_urls, fetch_page_content
 from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, check_duplicate_content
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
@@ -30,8 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 병렬 처리 동시 실행 수 (Claude CLI 동시 호출 제한)
-MAX_CONCURRENT = 3
+# MAX_CONCURRENT is loaded from config.py (default: 3)
 
 # 대기 중인 Claude Code 팁 저장 (callback_data -> {tip, title, ...})
 pending_tips = {}

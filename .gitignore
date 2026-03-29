@@ -1,4 +1,35 @@
+# Environment
 .env
+.env.local
+
+# Python
 __pycache__/
-temp/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Temp files
+temp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Claude Code local settings
+.claude/
+
+# Docker
+docker-compose.override.yml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Work log (personal)
+작업내역.md

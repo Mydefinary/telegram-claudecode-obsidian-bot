@@ -1,0 +1,7 @@
+services:
+  bot:
+    build: .
+    env_file: .env
+    volumes:
+      - ${OBSIDIAN_VAULT_PATH:-./vault}:/vault
+    restart: unless-stopped

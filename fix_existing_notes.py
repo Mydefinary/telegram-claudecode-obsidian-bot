@@ -8,7 +8,9 @@
 import os
 import re
 
-FOLDER = "E:/옵시디언/호아1/텔레그램"
+from config import OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER
+
+FOLDER = os.path.join(OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER)
 
 # 실패 판별 패턴
 FAIL_PATTERNS = [
