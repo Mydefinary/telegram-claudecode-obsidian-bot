@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python bot.py)",
+      "Bash(python -c \"import bot; import evaluator; print\\(''OK''\\)\")",
+      "Bash(python -c \"import bot; import evaluator; import obsidian_writer; print\\(''OK''\\)\")",
+      "Bash(python backfill_originals.py)",
+      "Bash(python -c \":*)",
+      "Bash(rm \"C:/Users/hoa/.claude/tips/20260329_01.md\")"
+    ]
+  }
+}
