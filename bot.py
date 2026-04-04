@@ -17,18 +17,23 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT
+from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT  # noqa: E402 (config initializes logging)
 from scraper import extract_urls, fetch_page_content
 from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, check_duplicate_content
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
 from kakao_parser import is_kakao_format, parse_kakao_txt
 from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
 logger = logging.getLogger(__name__)
+
+
+def split_my_thoughts(text: str) -> tuple[str, str]:
+    """텍스트에서 '내생각:' 이후를 분리한다. (content, my_thoughts) 반환."""
+    import re
+    match = re.search(r'(?:^|\n)\s*내생각\s*[:：]\s*', text)
+    if match:
+        return text[:match.start()].strip(), text[match.end():].strip()
+    return text, ""
 
 # MAX_CONCURRENT is loaded from config.py (default: 3)
 
@@ -136,6 +141,9 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
         if not item:
             return
 
+        # '내생각:' 분리
+        item, my_thoughts = split_my_thoughts(item)
+
         urls = extract_urls(item)
 
         if urls:
@@ -150,8 +158,12 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                 return
 
             try:
+                logger.info(f"URL 처리 시작: {url}")
                 page = await fetch_page_content(url)
                 scraped_ok = not page["error"] and len(page.get("content", "").strip()) > 100
+
+                if page["error"]:
+                    logger.warning(f"스크래핑 오류 (fallback 분석): {url} - {page['error']}")
 
                 if scraped_ok:
                     result = await analyze_link(url, page["title"], page["content"])
@@ -161,6 +173,7 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
 
                 # 분석 실패 시 저장하지 않고 실패 목록에 추가
                 if result["failed"]:
+                    logger.warning(f"분석 실패: {url}")
                     async with failed_urls_lock:
                         desc = non_url_text or page.get("title", "")
                         failed_urls.append(f"{url} ({desc})" if desc else url)
@@ -195,7 +208,7 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
 
                 # 신규 저장 (원본 포함)
                 original = page.get("content", "") if scraped_ok else ""
-                filepath = save_note(title=title, content=content, source_url=url, source_type="link", original_content=original)
+                filepath = save_note(title=title, content=content, source_url=url, source_type="link", original_content=original, my_thoughts=my_thoughts)
 
                 # 평가
                 try:
@@ -207,18 +220,20 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     # Claude Code 팁이 있으면 처리 유형 선택
                     await _show_tip_prompt(update.message, ev, title)
                 except Exception as ev_err:
-                    logger.error(f"평가 오류: {ev_err}")
+                    logger.error(f"평가 오류: {url} - {ev_err}", exc_info=True)
                     await update.message.reply_text(f"[완료] {title}")
 
             except Exception as e:
-                logger.error(f"Error processing {url}: {e}")
+                logger.error(f"URL 처리 실패: {url} - {e}", exc_info=True)
                 async with failed_urls_lock:
                     failed_urls.append(f"{url} (오류: {e})")
         else:
             try:
+                logger.info(f"텍스트 처리 시작: {item[:80]}...")
                 result = await analyze_text(item)
 
                 if result["failed"]:
+                    logger.warning(f"텍스트 분석 실패: {item[:80]}...")
                     async with failed_urls_lock:
                         failed_urls.append(f"텍스트: {item[:50]}...")
                     return
@@ -243,7 +258,7 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                         await update.message.reply_text(f"[보강] {dedup['similar_file']}에 새 정보 추가")
                         return
 
-                filepath = save_note(title=result["title"], content=result["content"], source_url="", source_type="text", original_content=item)
+                filepath = save_note(title=result["title"], content=result["content"], source_url="", source_type="text", original_content=item, my_thoughts=my_thoughts)
 
                 # 평가
                 try:
@@ -255,11 +270,11 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     # Claude Code 팁이 있으면 처리 유형 선택
                     await _show_tip_prompt(update.message, ev, result["title"])
                 except Exception as ev_err:
-                    logger.error(f"평가 오류: {ev_err}")
+                    logger.error(f"텍스트 평가 오류: {ev_err}", exc_info=True)
                     await update.message.reply_text(f"[완료] {result['title']}")
 
             except Exception as e:
-                logger.error(f"Error processing text: {e}")
+                logger.error(f"텍스트 처리 실패: {item[:80]}... - {e}", exc_info=True)
                 async with failed_urls_lock:
                     failed_urls.append(f"텍스트 오류: {item[:50]}...")
 
@@ -381,7 +396,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"--- 전체 {total}개 항목 처리 완료 ---")
 
     except Exception as e:
-        logger.error(f"Error handling document: {e}")
+        logger.error(f"문서 처리 실패: {file_name} - {e}", exc_info=True)
         await update.message.reply_text(f"파일 처리 오류: {e}")
 
 
@@ -392,6 +407,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption = update.message.caption or ""
 
     await update.message.reply_text("이미지 분석 중...")
+    logger.info(f"이미지 처리 시작: file_id={photo.file_id}")
 
     try:
         # 이미지 다운로드
@@ -425,7 +441,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         os.remove(temp_path)
 
     except Exception as e:
-        logger.error(f"Error processing image: {e}")
+        logger.error(f"이미지 처리 실패: {e}", exc_info=True)
         await update.message.reply_text(f"[오류] 이미지 분석 실패\n{e}")
 
 

@@ -1,7 +1,9 @@
 import re
+import logging
 import httpx
 from bs4 import BeautifulSoup
 
+logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+')
 
@@ -20,6 +22,7 @@ async def fetch_page_content(url: str) -> dict:
             resp = await client.get(url, headers=headers)
             resp.raise_for_status()
     except Exception as e:
+        logger.error(f"페이지 fetch 실패: {url} - {e}", exc_info=True)
         return {"url": url, "title": "", "content": "", "error": str(e)}
 
     soup = BeautifulSoup(resp.text, "html.parser")

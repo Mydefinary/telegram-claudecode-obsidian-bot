@@ -15,6 +15,9 @@ venv/
 # Temp files
 temp/
 
+# Logs
+logs/
+
 # IDE
 .vscode/
 .idea/

@@ -1,8 +1,11 @@
 import os
 import re
+import logging
 import shutil
 from datetime import datetime
 from config import OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER
+
+logger = logging.getLogger(__name__)
 
 
 def get_existing_urls() -> set:
@@ -83,18 +86,23 @@ def get_existing_notes_summary() -> list[dict]:
 
 def append_to_existing_note(filepath: str, new_content: str):
     """기존 노트에 새로운 내용을 추가한다."""
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
 
-    # 평가 섹션 앞에 삽입
-    if "## 평가" in content:
-        parts = content.split("## 평가", 1)
-        updated = parts[0].rstrip() + f"\n\n---\n### 추가 정보\n{new_content}\n\n## 평가" + parts[1]
-    else:
-        updated = content.rstrip() + f"\n\n---\n### 추가 정보\n{new_content}\n"
+        # 평가 섹션 앞에 삽입
+        if "## 평가" in content:
+            parts = content.split("## 평가", 1)
+            updated = parts[0].rstrip() + f"\n\n---\n### 추가 정보\n{new_content}\n\n## 평가" + parts[1]
+        else:
+            updated = content.rstrip() + f"\n\n---\n### 추가 정보\n{new_content}\n"
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(updated)
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(updated)
+        logger.info(f"노트 보강 완료: {filepath}")
+    except Exception as e:
+        logger.error(f"노트 보강 실패: {filepath} - {e}", exc_info=True)
+        raise
 
 
 def sanitize_filename(name: str) -> str:
@@ -116,7 +124,14 @@ def _format_original_section(original: str) -> str:
     return f"\n\n---\n> [!quote]- 원본 보기\n{quoted}\n"
 
 
-def save_note(title: str, content: str, source_url: str = "", source_type: str = "link", original_content: str = "") -> str:
+def _format_my_thoughts_section(thoughts: str) -> str:
+    """내 생각 섹션을 포맷한다. 전체 텍스트를 보존."""
+    if not thoughts or not thoughts.strip():
+        return ""
+    return f"\n\n---\n## 💭 내 생각\n\n{thoughts.strip()}\n"
+
+
+def save_note(title: str, content: str, source_url: str = "", source_type: str = "link", original_content: str = "", my_thoughts: str = "") -> str:
     """분석 결과를 옵시디언 마크다운 파일로 저장한다."""
     folder_path = os.path.join(OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER)
     os.makedirs(folder_path, exist_ok=True)
@@ -138,21 +153,28 @@ def save_note(title: str, content: str, source_url: str = "", source_type: str =
         counter += 1
 
     # 옵시디언 프론트매터 + 본문 구성
+    tags_line = 'tags: [my-thought]\n' if my_thoughts else ''
     frontmatter = f"""---
 created: {date_str} {time_str}
 source: {source_type}
 url: "{source_url}"
-via: telegram-bot
+{tags_line}via: telegram-bot
 ---
 
 """
 
     header = f"# {title or 'Telegram Note'}\n\n"
+    thoughts_section = _format_my_thoughts_section(my_thoughts)
     original_section = _format_original_section(original_content)
-    full_content = frontmatter + header + content + original_section + "\n"
+    full_content = frontmatter + header + content + thoughts_section + original_section + "\n"
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(full_content)
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(full_content)
+        logger.info(f"노트 저장: {filepath}")
+    except Exception as e:
+        logger.error(f"노트 저장 실패: {filepath} - {e}", exc_info=True)
+        raise
 
     return filepath
 
@@ -167,5 +189,10 @@ def copy_image_to_vault(image_path: str) -> str:
     dest_name = f"img_{timestamp}{ext}"
     dest_path = os.path.join(attachments_dir, dest_name)
 
-    shutil.copy2(image_path, dest_path)
+    try:
+        shutil.copy2(image_path, dest_path)
+        logger.info(f"이미지 복사: {image_path} -> {dest_path}")
+    except Exception as e:
+        logger.error(f"이미지 복사 실패: {image_path} - {e}", exc_info=True)
+        raise
     return dest_path

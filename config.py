@@ -1,8 +1,51 @@
 import os
+import logging
 import shutil
+from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Logging ──
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+_log_formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# 파일 핸들러: 5MB 회전, 최대 5개 백업
+_file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, "bot.log"),
+    maxBytes=5 * 1024 * 1024,
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(_log_formatter)
+_file_handler.setLevel(logging.DEBUG)
+
+# 에러 전용 파일 핸들러
+_error_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, "error.log"),
+    maxBytes=5 * 1024 * 1024,
+    backupCount=3,
+    encoding="utf-8",
+)
+_error_handler.setFormatter(_log_formatter)
+_error_handler.setLevel(logging.ERROR)
+
+# 콘솔 핸들러
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
+_console_handler.setLevel(logging.INFO)
+
+# 루트 로거 설정
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.DEBUG)
+_root_logger.addHandler(_file_handler)
+_root_logger.addHandler(_error_handler)
+_root_logger.addHandler(_console_handler)
 
 # Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

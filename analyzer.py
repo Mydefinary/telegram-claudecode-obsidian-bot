@@ -1,7 +1,10 @@
 import asyncio
+import logging
 import re
 
 from config import ANALYSIS_ENGINE, CLAUDE_CMD, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OPENAI_API_KEY, OPENAI_MODEL
+
+logger = logging.getLogger(__name__)
 from prompts import get_prompts
 
 _prompts = get_prompts()
@@ -49,23 +52,33 @@ def remove_title_line(text: str) -> str:
 
 async def _run_claude_cli(prompt: str) -> str:
     """Run analysis via Claude Code CLI (stdin pipe)."""
-    proc = await asyncio.create_subprocess_exec(
-        CLAUDE_CMD, "-p", "-",
-        "--allowedTools", "WebFetch,WebSearch,Read",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(input=prompt.encode("utf-8")),
-        timeout=180,
-    )
+    logger.debug("Claude CLI 호출 시작")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            CLAUDE_CMD, "-p", "-",
+            "--allowedTools", "WebFetch,WebSearch,Read",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=prompt.encode("utf-8")),
+            timeout=180,
+        )
+    except asyncio.TimeoutError:
+        logger.error("Claude CLI 타임아웃 (180초 초과)")
+        raise
+    except Exception as e:
+        logger.error(f"Claude CLI 프로세스 실행 실패: {e}", exc_info=True)
+        raise
 
     if proc.returncode != 0:
         error_msg = stderr.decode("utf-8", errors="replace").strip()
+        logger.error(f"Claude CLI 비정상 종료 (code={proc.returncode}): {error_msg}")
         raise RuntimeError(f"Claude CLI error: {error_msg}")
 
     result = stdout.decode("utf-8", errors="replace").strip()
+    logger.debug(f"Claude CLI 응답 수신: {len(result)}자")
     return clean_analysis(result)
 
 
@@ -78,13 +91,20 @@ async def _run_anthropic_api(prompt: str) -> str:
             "anthropic package not installed. Run: pip install anthropic"
         )
 
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    message = await client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    logger.debug(f"Anthropic API 호출: model={ANTHROPIC_MODEL}")
+    try:
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        message = await client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        logger.error(f"Anthropic API 호출 실패: {e}", exc_info=True)
+        raise
+
     result = message.content[0].text
+    logger.debug(f"Anthropic API 응답 수신: {len(result)}자")
     return clean_analysis(result)
 
 
@@ -97,13 +117,20 @@ async def _run_openai_api(prompt: str) -> str:
             "openai package not installed. Run: pip install openai"
         )
 
-    client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    response = await client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        max_tokens=4096,
-    )
+    logger.debug(f"OpenAI API 호출: model={OPENAI_MODEL}")
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
+        )
+    except Exception as e:
+        logger.error(f"OpenAI API 호출 실패: {e}", exc_info=True)
+        raise
+
     result = response.choices[0].message.content
+    logger.debug(f"OpenAI API 응답 수신: {len(result)}자")
     return clean_analysis(result)
 
 

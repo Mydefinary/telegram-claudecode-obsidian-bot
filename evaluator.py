@@ -2,9 +2,12 @@
 
 import os
 import re
+import logging
 from analyzer import _run_claude
 from prompts import get_prompts
 from config import LANGUAGE
+
+logger = logging.getLogger(__name__)
 
 _prompts = get_prompts()
 EVAL_PROMPT = _prompts["eval"]
@@ -76,13 +79,16 @@ def parse_eval_result(text: str) -> dict:
 
 async def evaluate_note(title: str, content: str, url: str = "") -> dict:
     """Evaluate a note."""
+    logger.info(f"노트 평가 시작: {title}")
     note_text = f"Title: {title}\nURL: {url}\n\n{content}"
     if len(note_text) > 4000:
         note_text = note_text[:4000] + "\n...(truncated)"
 
     prompt = f"{EVAL_PROMPT}\n\n--- Note to evaluate ---\n{note_text}"
     raw = await _run_claude(prompt)
-    return parse_eval_result(raw)
+    result = parse_eval_result(raw)
+    logger.info(f"노트 평가 완료: {title} -> 등급 {result['grade']}")
+    return result
 
 
 def format_eval_tags(result: dict) -> str:
@@ -129,6 +135,7 @@ def append_to_claude_md(tip: str, source_title: str):
             content = f.read()
 
     if tip in content:
+        logger.debug(f"중복 팁 스킵 (global): {tip[:50]}")
         return False
 
     section_header = "## Claude Code 팁 (자동 수집)"
@@ -137,8 +144,13 @@ def append_to_claude_md(tip: str, source_title: str):
 
     content += f"- {tip} (출처: {source_title})\n"
 
-    with open(CLAUDE_MD_PATH, "w", encoding="utf-8") as f:
-        f.write(content)
+    try:
+        with open(CLAUDE_MD_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"Global 팁 추가: {tip[:50]}")
+    except Exception as e:
+        logger.error(f"CLAUDE.md 쓰기 실패: {e}", exc_info=True)
+        return False
 
     return True
 
@@ -187,8 +199,13 @@ def save_tip_to_pool(tip: str, tip_desc: str, source_title: str, skill_name: str
     if skill_name and skill_name not in _NONE_VALUES:
         lines.extend(["", "## 관련 스킬명", skill_name])
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        logger.info(f"팁 풀 저장: {filepath}")
+    except Exception as e:
+        logger.error(f"팁 풀 저장 실패: {e}", exc_info=True)
+        return False
 
     return filepath
 
@@ -206,6 +223,7 @@ def create_skill(skill_name: str, tip: str, tip_desc: str, source_title: str):
     filepath = os.path.join(COMMANDS_DIR, f"{safe_name}.md")
 
     if os.path.exists(filepath):
+        logger.debug(f"중복 스킬 스킵: {safe_name}")
         return False
 
     lines = [tip]
@@ -213,19 +231,27 @@ def create_skill(skill_name: str, tip: str, tip_desc: str, source_title: str):
         lines.append(f"\n## Background\n{tip_desc}")
     lines.append(f"\n---\n> Source: {source_title}")
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        logger.info(f"스킬 생성: /{safe_name} -> {filepath}")
+    except Exception as e:
+        logger.error(f"스킬 파일 생성 실패: {e}", exc_info=True)
+        return False
 
     return filepath
 
 
 def update_note_with_eval(filepath: str, eval_text: str):
     """Append evaluation result to the end of an Obsidian note file."""
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
 
-    if "## 평가" in content or "## Evaluation" in content:
-        return
+        if "## 평가" in content or "## Evaluation" in content:
+            return
 
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write(eval_text)
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(eval_text)
+    except Exception as e:
+        logger.error(f"평가 결과 저장 실패: {filepath} - {e}", exc_info=True)
