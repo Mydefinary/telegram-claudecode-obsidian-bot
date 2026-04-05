@@ -59,10 +59,10 @@ def remove_title_line(text: str) -> str:
 
 # ── Engine implementations ──
 
-async def _run_claude_cli(prompt: str, allowed_tools: str = "WebFetch,WebSearch,Read") -> str:
+async def _run_claude_cli(prompt: str, allowed_tools: str | None = "WebFetch,WebSearch,Read") -> str:
     """Run analysis via Claude Code CLI (stdin pipe)."""
     cmd = [CLAUDE_CMD, "-p", "-"]
-    if allowed_tools:
+    if allowed_tools is not None:
         cmd += ["--allowedTools", allowed_tools]
 
     logger.debug(f"Claude CLI 호출 시작 (tools={allowed_tools or 'none'})")
@@ -79,6 +79,11 @@ async def _run_claude_cli(prompt: str, allowed_tools: str = "WebFetch,WebSearch,
         )
     except asyncio.TimeoutError:
         logger.error(f"Claude CLI 타임아웃 (180초 초과), prompt={len(prompt)}자")
+        try:
+            proc.kill()
+            await proc.wait()
+        except Exception:
+            pass
         raise
     except Exception as e:
         logger.error(f"Claude CLI 프로세스 실행 실패: {e}", exc_info=True)
@@ -186,7 +191,7 @@ async def _run_gemini_api(prompt: str, youtube_url: str = "") -> str:
     return clean_analysis(result)
 
 
-async def _run_claude(prompt: str, allowed_tools: str = "WebFetch,WebSearch,Read") -> str:
+async def _run_claude(prompt: str, allowed_tools: str | None = "WebFetch,WebSearch,Read") -> str:
     """Route to the configured analysis engine."""
     if ANALYSIS_ENGINE == "anthropic":
         return await _run_anthropic_api(prompt)

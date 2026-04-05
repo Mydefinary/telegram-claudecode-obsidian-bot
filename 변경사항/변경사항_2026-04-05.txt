@@ -55,6 +55,13 @@
    - README_ko.md: Same updates in Korean
    - .env.example: Added MESSAGE_MERGE settings
 
+8. [CLI Tool Leak Fix] allowed_tools="" passed as no restriction
+   - Root cause: `if allowed_tools:` treated "" as falsy → --allowedTools omitted entirely
+     → Claude CLI had access to ALL tools → web search/fetch on plain text → 180s timeout
+   - analyzer.py: Changed `if allowed_tools:` → `if allowed_tools is not None:`
+     → Empty string now correctly passes `--allowedTools ""` to disable all tools
+   - analyzer.py: Added proc.kill() + proc.wait() on timeout to prevent zombie processes
+
 ========================================
  Files Changed
 ========================================
@@ -119,6 +126,13 @@ Modified: bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
    - README.md: 라이센스 배지 변경, 새 기능 5개 추가, 설정 테이블 확장
    - README_ko.md: 동일 내용 한국어 반영
    - .env.example: MESSAGE_MERGE 설정 추가
+
+8. [CLI 도구 누수 수정] allowed_tools="" 빈 문자열이 도구 제한 없음으로 처리됨
+   - 근본 원인: `if allowed_tools:`에서 ""가 falsy → --allowedTools 미전달
+     → Claude CLI가 모든 도구 자유 사용 → 텍스트에서 웹 검색/패치 시도 → 180초 타임아웃
+   - analyzer.py: `if allowed_tools:` → `if allowed_tools is not None:` 변경
+     → 빈 문자열도 `--allowedTools ""`로 CLI에 전달하여 도구 사용 차단
+   - analyzer.py: 타임아웃 시 proc.kill() + proc.wait() 추가로 좀비 프로세스 방지
 
 ========================================
  변경 파일 목록
