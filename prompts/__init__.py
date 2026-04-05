@@ -12,6 +12,7 @@ def get_prompts() -> dict:
         "link_analysis": mod.LINK_ANALYSIS_PROMPT,
         "text_analysis": mod.TEXT_ANALYSIS_PROMPT,
         "image_analysis": mod.IMAGE_ANALYSIS_PROMPT,
+        "github_analysis": mod.GITHUB_ANALYSIS_PROMPT,
         "dedup": mod.DEDUP_PROMPT,
         "eval": mod.EVAL_PROMPT,
         "fail_patterns": mod.FAIL_PATTERNS,

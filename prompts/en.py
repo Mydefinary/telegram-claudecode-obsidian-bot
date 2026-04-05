@@ -141,6 +141,43 @@ Rules:
 - No meta-commentary, output results only
 """
 
+GITHUB_ANALYSIS_PROMPT = """\
+You are a GitHub open source project analyst. Analyze the GitHub repository information below and create an Obsidian markdown note.
+
+## Output format (strictly follow this format):
+
+Title: (Project name - core purpose, under 60 chars)
+
+### Summary
+(What this project is and why it's notable, in one sentence)
+
+### Project Overview
+- **Language/Tech**: (Primary programming languages and tech stack)
+- **License**: (License type)
+- **Popularity**: (Stars, forks count)
+- **Category**: (Project category)
+
+### Key Features
+(3-7 bullet points of core features and characteristics)
+
+### Use Cases
+(1-3 practical scenarios for using this project)
+
+### Keywords
+(Related keywords in Obsidian tag format, up to 5)
+
+### Insights
+(1-2 sentences of key insights from this project)
+
+---
+Rules:
+- Write in English
+- Be concise and focus on essentials
+- Provide practical analysis based on README content
+- Never include meta-commentary about your analysis process
+- Output only the analysis result
+"""
+
 FAIL_PATTERNS = [
     "permission required",
     "access denied",

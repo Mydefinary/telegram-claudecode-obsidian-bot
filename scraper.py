@@ -2,6 +2,7 @@ import re
 import logging
 import httpx
 from bs4 import BeautifulSoup
+from config import GITHUB_TOKEN
 
 logger = logging.getLogger(__name__)
 
@@ -55,3 +56,98 @@ async def fetch_page_content(url: str) -> dict:
         text = text[:max_chars] + "\n...(truncated)"
 
     return {"url": url, "title": title, "content": text, "error": ""}
+
+
+# ── GitHub ──
+
+_GITHUB_REPO_PATTERN = re.compile(
+    r'https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$'
+)
+
+
+def is_github_repo_url(url: str) -> bool:
+    """GitHub 저장소 루트 URL인지 판별한다. issues/blob 등 하위 경로는 제외."""
+    return bool(_GITHUB_REPO_PATTERN.match(url))
+
+
+def _parse_github_owner_repo(url: str) -> tuple[str, str]:
+    """GitHub URL에서 owner, repo를 추출한다."""
+    m = _GITHUB_REPO_PATTERN.match(url)
+    if m:
+        return m.group(1), m.group(2)
+    return "", ""
+
+
+async def fetch_github_repo(url: str) -> dict:
+    """GitHub API로 저장소 메타데이터 + README를 ���져온다.
+    API 실패 시 raw.githubusercontent.com으로 폴백.
+    """
+    owner, repo = _parse_github_owner_repo(url)
+    if not owner or not repo:
+        return {"url": url, "owner": "", "repo": "", "description": "",
+                "stars": 0, "forks": 0, "language": "", "topics": [],
+                "license": "", "readme_content": "", "error": "Invalid GitHub URL"}
+
+    result = {
+        "url": url, "owner": owner, "repo": repo,
+        "description": "", "stars": 0, "forks": 0,
+        "language": "", "topics": [], "license": "",
+        "readme_content": "", "error": "",
+    }
+
+    headers = {"Accept": "application/vnd.github+json"}
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # 1) 저장소 메타데이터
+            resp = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}",
+                headers=headers,
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                result["description"] = data.get("description") or ""
+                result["stars"] = data.get("stargazers_count", 0)
+                result["forks"] = data.get("forks_count", 0)
+                result["language"] = data.get("language") or ""
+                result["topics"] = data.get("topics") or []
+                license_info = data.get("license")
+                result["license"] = license_info.get("name", "") if license_info else ""
+            else:
+                logger.warning(f"GitHub API 메타데이터 실패 ({resp.status_code}): {owner}/{repo}")
+
+            # 2) README (raw 텍스트로 직접 수신)
+            readme_headers = {**headers, "Accept": "application/vnd.github.raw+json"}
+            resp_readme = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/readme",
+                headers=readme_headers,
+            )
+            if resp_readme.status_code == 200:
+                result["readme_content"] = resp_readme.text
+            else:
+                logger.warning(f"GitHub API README 실패 ({resp_readme.status_code}), raw 폴백 시도")
+                raise httpx.HTTPStatusError("README fallback", request=resp_readme.request, response=resp_readme)
+
+    except Exception as e:
+        # API 실패 → raw.githubusercontent.com 폴백
+        logger.info(f"GitHub API 실패, raw 폴백: {owner}/{repo} - {e}")
+        try:
+            async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
+                raw_resp = await client.get(
+                    f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/README.md"
+                )
+                if raw_resp.status_code == 200:
+                    result["readme_content"] = raw_resp.text
+                else:
+                    result["error"] = f"README fetch failed ({raw_resp.status_code})"
+        except Exception as raw_err:
+            logger.error(f"GitHub raw 폴백도 실패: {owner}/{repo} - {raw_err}")
+            result["error"] = str(raw_err)
+
+    # README 길이 제한
+    if len(result["readme_content"]) > 8000:
+        result["readme_content"] = result["readme_content"][:8000] + "\n...(truncated)"
+
+    return result

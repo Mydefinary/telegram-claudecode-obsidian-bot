@@ -18,8 +18,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT  # noqa: E402
-from scraper import extract_urls, fetch_page_content
-from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, analyze_youtube, check_duplicate_content, is_youtube_url
+from scraper import extract_urls, fetch_page_content, is_github_repo_url
+from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, analyze_youtube, analyze_github, check_duplicate_content, is_youtube_url
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
 from kakao_parser import is_kakao_format, parse_kakao_txt
 from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval
@@ -165,10 +165,15 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
             try:
                 logger.info(f"URL 처리 시작: {url}")
 
-                # YouTube는 Gemini로 분석
+                # YouTube는 Gemini, GitHub는 API+README로 분석
                 if is_youtube_url(url):
                     logger.info(f"YouTube 감지, Gemini 분석: {url}")
                     result = await analyze_youtube(url)
+                    page = {"title": "", "content": "", "error": ""}
+                    scraped_ok = False
+                elif is_github_repo_url(url):
+                    logger.info(f"GitHub 저장소 감지: {url}")
+                    result = await analyze_github(url)
                     page = {"title": "", "content": "", "error": ""}
                     scraped_ok = False
                 else:
@@ -369,6 +374,9 @@ async def _process_combined_message(text: str, urls: list[str], update: Update):
         try:
             if is_youtube_url(url):
                 result = await analyze_youtube(url)
+                page_content = ""
+            elif is_github_repo_url(url):
+                result = await analyze_github(url)
                 page_content = ""
             else:
                 page = await fetch_page_content(url)

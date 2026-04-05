@@ -12,6 +12,7 @@ _prompts = get_prompts()
 LINK_ANALYSIS_PROMPT = _prompts["link_analysis"]
 TEXT_ANALYSIS_PROMPT = _prompts["text_analysis"]
 IMAGE_ANALYSIS_PROMPT = _prompts["image_analysis"]
+GITHUB_ANALYSIS_PROMPT = _prompts["github_analysis"]
 DEDUP_PROMPT = _prompts["dedup"]
 FAIL_PATTERNS = _prompts["fail_patterns"]
 META_PATTERNS = _prompts["meta_patterns"]
@@ -347,3 +348,49 @@ async def analyze_youtube(url: str) -> dict:
     ai_title = extract_title_from_analysis(result)
     body = remove_title_line(result)
     return {"title": ai_title or "YouTube", "content": body, "failed": False}
+
+
+async def analyze_github(url: str) -> dict:
+    """GitHub 저장소를 분석한다. API로 메타데이터+README 취득 후 Claude 분석.
+    Returns: {"title": str, "content": str, "failed": bool}
+    """
+    from scraper import fetch_github_repo
+
+    logger.info(f"GitHub 저장소 분석: {url}")
+    repo_data = await fetch_github_repo(url)
+
+    if repo_data["error"] and not repo_data["readme_content"]:
+        logger.warning(f"GitHub fetch 실패, 직접 분석 폴백: {url}")
+        return await analyze_link_direct(url)
+
+    # 메타데이터 + README를 프롬프트에 조합
+    meta_parts = [f"- URL: {url}"]
+    if repo_data["description"]:
+        meta_parts.append(f"- Description: {repo_data['description']}")
+    if repo_data["language"]:
+        meta_parts.append(f"- Language: {repo_data['language']}")
+    if repo_data["stars"]:
+        meta_parts.append(f"- Stars: {repo_data['stars']:,} | Forks: {repo_data['forks']:,}")
+    if repo_data["topics"]:
+        meta_parts.append(f"- Topics: {', '.join(repo_data['topics'])}")
+    if repo_data["license"]:
+        meta_parts.append(f"- License: {repo_data['license']}")
+
+    meta_section = "\n".join(meta_parts)
+    readme = repo_data["readme_content"] or "(README not available)"
+
+    prompt = (
+        f"{GITHUB_ANALYSIS_PROMPT}\n\n"
+        f"## Repository Information\n{meta_section}\n\n"
+        f"## README\n{readme}"
+    )
+
+    result = await _run_claude(prompt, allowed_tools="")
+
+    if is_analysis_failed(result):
+        return {"title": "", "content": "", "failed": True}
+
+    ai_title = extract_title_from_analysis(result)
+    body = remove_title_line(result)
+    repo_name = f"{repo_data['owner']}/{repo_data['repo']}"
+    return {"title": ai_title or repo_name, "content": body, "failed": False}

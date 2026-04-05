@@ -34,6 +34,7 @@ _mock_prompts = {
     "link_analysis": "mock link prompt",
     "text_analysis": "mock text prompt",
     "image_analysis": "mock image prompt",
+    "github_analysis": "mock github prompt",
     "dedup": "mock dedup prompt",
     "fail_patterns": _TEST_FAIL_PATTERNS,
     "meta_patterns": _TEST_META_PATTERNS,
