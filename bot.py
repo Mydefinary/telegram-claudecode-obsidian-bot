@@ -216,8 +216,8 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                         await update.message.reply_text(f"[보강] {dedup['similar_file']}에 새 정보 추가")
                         return
 
-                # 신규 저장 (원본 포함)
-                original = page.get("content", "") if scraped_ok else ""
+                # 신규 저장 (원본 포함 — 스크래핑 부분 성공도 저장)
+                original = page.get("content", "")
                 filepath = save_note(title=title, content=content, source_url=url, source_type="link", original_content=original, my_thoughts=my_thoughts)
 
                 # 평가
@@ -340,14 +340,115 @@ merge_enabled = MESSAGE_MERGE_ENABLED
 _merge_buffers: dict = {}
 
 
+async def _process_combined_message(text: str, urls: list[str], update: Update):
+    """텍스트 + 여러 링크를 하나의 통합 노트로 처리한다."""
+    non_url_text = text
+    for u in urls:
+        non_url_text = non_url_text.replace(u, "").strip()
+
+    non_url_text, my_thoughts = split_my_thoughts(non_url_text)
+
+    await update.message.reply_text(f"텍스트 + {len(urls)}개 링크 통합 분석 중...")
+
+    sections = []
+    originals = []
+    first_title = ""
+    source_urls = []
+    failed = []
+
+    for url in urls:
+        if is_url_duplicate(url):
+            sections.append(f"### {url}\n[중복 - 기존 노트 참조]")
+            continue
+
+        source_urls.append(url)
+
+        try:
+            if is_youtube_url(url):
+                result = await analyze_youtube(url)
+                page_content = ""
+            else:
+                page = await fetch_page_content(url)
+                page_content = page.get("content", "")
+                scraped_ok = not page["error"] and len(page_content.strip()) > 100
+
+                if scraped_ok:
+                    result = await analyze_link(url, page["title"], page_content)
+                else:
+                    result = await analyze_link_direct(url)
+
+            if result["failed"]:
+                failed.append(url)
+                continue
+
+            title = result["title"] or url.split("/")[-1]
+            if not first_title:
+                first_title = title
+
+            sections.append(f"### {title}\n> {url}\n\n{result['content']}")
+
+            if page_content:
+                originals.append(f"[{title}]\n{page_content}")
+
+        except Exception as e:
+            logger.error(f"통합 분석 중 URL 실패: {url} - {e}", exc_info=True)
+            failed.append(url)
+
+    if not sections:
+        await update.message.reply_text("[처리 실패] 모든 링크 분석에 실패했습니다.")
+        return
+
+    # 노트 구성
+    content_parts = []
+    if non_url_text:
+        content_parts.append(f"> {non_url_text}\n")
+    content_parts.extend(sections)
+    combined_content = "\n\n".join(content_parts)
+
+    combined_original = "\n\n---\n\n".join(originals) if originals else ""
+    note_title = first_title or non_url_text[:30] or "Combined Note"
+
+    filepath = save_note(
+        title=note_title,
+        content=combined_content,
+        source_url=source_urls[0] if source_urls else "",
+        source_type="link",
+        original_content=combined_original,
+        my_thoughts=my_thoughts,
+    )
+
+    # 평가
+    try:
+        ev = await evaluate_note(note_title, combined_content, source_urls[0] if source_urls else "")
+        update_note_with_eval(filepath, format_eval_tags(ev))
+        await update.message.reply_text(f"[완료] {note_title} (등급: {ev['grade']}, {len(sections)}개 링크 통합)")
+        await _show_tip_prompt(update.message, ev, note_title)
+    except Exception as ev_err:
+        logger.error(f"통합 노트 평가 오류: {ev_err}", exc_info=True)
+        await update.message.reply_text(f"[완료] {note_title} ({len(sections)}개 링크 통합)")
+
+    if failed:
+        await update.message.reply_text("[일부 실패]\n" + "\n".join(f"- {u}" for u in failed))
+
+
 async def _process_text_message(text: str, update: Update):
     """텍스트를 분석하고 옵시디언에 저장한다."""
     urls = extract_urls(text)
 
     if urls:
-        await update.message.reply_text(f"{len(urls)}개 링크 분석 중... (병렬 처리)")
-        await process_queue([url for url in urls], update)
-        await update.message.reply_text(f"--- 전체 {len(urls)}개 처리 완료 ---")
+        # URL 제거 후 남은 텍스트 확인
+        non_url_text = text
+        for u in urls:
+            non_url_text = non_url_text.replace(u, "").strip()
+
+        if non_url_text:
+            # 텍스트 + 링크 → 하나의 통합 노트
+            await _process_combined_message(text, urls, update)
+        else:
+            # 링크만 → 각각 독립 처리
+            await update.message.reply_text(f"{len(urls)}개 링크 분석 중... (병렬 처리)")
+            await process_queue(urls, update)
+            await update.message.reply_text(f"--- 전체 {len(urls)}개 처리 완료 ---")
     else:
         await update.message.reply_text("텍스트 분석 중...")
         failed_urls = []
