@@ -99,6 +99,14 @@ See [Configuration](#configuration-1) for all available variables.
 python bot.py
 ```
 
+Or run as a background daemon with PM2 (recommended):
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save                          # Persist process list
+pm2-startup install               # Auto-start on Windows reboot
+```
+
 Or run in background on Windows (no console window):
 
 ```
@@ -185,6 +193,7 @@ telegram-obsidian-bot/
 ├── backfill_tags.py        # Backfill tags into existing tip files
 ├── Dockerfile              # Docker image build
 ├── docker-compose.yml      # Docker Compose configuration
+├── ecosystem.config.cjs    # PM2 daemon configuration
 ├── start.bat               # Windows startup script (with console)
 ├── start_hidden.vbs        # Windows background startup (no console)
 ├── logs/                   # Runtime logs (bot.log + error.log, git-ignored)
@@ -203,6 +212,7 @@ telegram-obsidian-bot/
 | AI Engines | Claude Code CLI / Anthropic API / OpenAI API (configurable) |
 | Environment | python-dotenv |
 | Note Storage | Direct markdown file creation in Obsidian vault |
+| Process Manager | PM2 (daemon mode, auto-restart) |
 | Container | Docker + Docker Compose |
 
 ## Contributing

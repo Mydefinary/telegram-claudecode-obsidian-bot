@@ -47,59 +47,62 @@ async def _show_tip_prompt(message, ev, title):
     if not tip or tip == "없음":
         return
 
-    import uuid
-    tip_id = str(uuid.uuid4())[:8]
-    pending_tips[tip_id] = {
-        "tip": tip,
-        "title": title,
-        "tip_desc": ev.get("tip_desc", ""),
-        "tip_action": ev.get("tip_action", ""),
-        "tip_confidence": ev.get("tip_confidence", 0),
-        "tip_action_reason": ev.get("tip_action_reason", ""),
-        "skill_name": ev.get("skill_name", ""),
-        "tags": ev.get("tags", []),
-    }
+    try:
+        import uuid
+        tip_id = str(uuid.uuid4())[:8]
+        pending_tips[tip_id] = {
+            "tip": tip,
+            "title": title,
+            "tip_desc": ev.get("tip_desc", ""),
+            "tip_action": ev.get("tip_action", ""),
+            "tip_confidence": ev.get("tip_confidence", 0),
+            "tip_action_reason": ev.get("tip_action_reason", ""),
+            "skill_name": ev.get("skill_name", ""),
+            "tags": ev.get("tags", []),
+        }
 
-    tip_desc = ev.get("tip_desc", "")
-    tip_action = ev.get("tip_action", "")
-    tip_action_reason = ev.get("tip_action_reason", "")
+        tip_desc = ev.get("tip_desc", "")
+        tip_action = ev.get("tip_action", "")
+        tip_action_reason = ev.get("tip_action_reason", "")
 
-    # 메시지 구성
-    action_labels = {"global": "Global 반영", "skill": "Skill 제작", "풀": "팁 저장", "저장": "일반 저장"}
-    msg_parts = ["[Claude Code 팁 발견]", f"팁: {tip}"]
-    if tip_desc and tip_desc != "없음":
-        msg_parts.append(f"설명: {tip_desc}")
-    tip_confidence = ev.get("tip_confidence", 0)
-    if tip_action and tip_action != "없음":
-        label = action_labels.get(tip_action, tip_action)
-        stars = "⭐" * tip_confidence + "☆" * (5 - tip_confidence) if tip_confidence else ""
-        confidence_str = f" {stars} ({tip_confidence}/5)" if tip_confidence else ""
-        msg_parts.append(f"권장: {label}{confidence_str}")
-    if tip_action_reason and tip_action_reason != "없음":
-        msg_parts.append(f"근거: {tip_action_reason}")
+        # 메시지 구성
+        action_labels = {"global": "Global 반영", "skill": "Skill 제작", "풀": "팁 저장", "저장": "일반 저장"}
+        msg_parts = ["[Claude Code 팁 발견]", f"팁: {tip}"]
+        if tip_desc and tip_desc != "없음":
+            msg_parts.append(f"설명: {tip_desc}")
+        tip_confidence = ev.get("tip_confidence", 0)
+        if tip_action and tip_action != "없음":
+            label = action_labels.get(tip_action, tip_action)
+            stars = "⭐" * tip_confidence + "☆" * (5 - tip_confidence) if tip_confidence else ""
+            confidence_str = f" {stars} ({tip_confidence}/5)" if tip_confidence else ""
+            msg_parts.append(f"권장: {label}{confidence_str}")
+        if tip_action_reason and tip_action_reason != "없음":
+            msg_parts.append(f"근거: {tip_action_reason}")
 
-    skill_name = ev.get("skill_name", "")
-    if skill_name and skill_name != "없음":
-        msg_parts.append(f"스킬명: /{skill_name}")
+        skill_name = ev.get("skill_name", "")
+        if skill_name and skill_name != "없음":
+            msg_parts.append(f"스킬명: /{skill_name}")
 
-    tags = ev.get("tags", [])
-    if tags:
-        msg_parts.append(f"태그: {', '.join(tags)}")
+        tags = ev.get("tags", [])
+        if tags:
+            msg_parts.append(f"태그: {', '.join(tags)}")
 
-    msg_parts.append("\n어떻게 처리할까요?")
+        msg_parts.append("\n어떻게 처리할까요?")
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("Global 반영", callback_data=f"tip_global:{tip_id}"),
-            InlineKeyboardButton("Skill 제작", callback_data=f"tip_skill:{tip_id}"),
-        ],
-        [
-            InlineKeyboardButton("팁 저장", callback_data=f"tip_pool:{tip_id}"),
-            InlineKeyboardButton("스킵", callback_data=f"tip_skip:{tip_id}"),
-        ],
-    ])
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Global 반영", callback_data=f"tip_global:{tip_id}"),
+                InlineKeyboardButton("Skill 제작", callback_data=f"tip_skill:{tip_id}"),
+            ],
+            [
+                InlineKeyboardButton("팁 저장", callback_data=f"tip_pool:{tip_id}"),
+                InlineKeyboardButton("스킵", callback_data=f"tip_skip:{tip_id}"),
+            ],
+        ])
 
-    await message.reply_text("\n".join(msg_parts), reply_markup=keyboard)
+        await message.reply_text("\n".join(msg_parts), reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"팁 프롬프트 전송 실패: {title} - {e}", exc_info=True)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -492,7 +495,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # 병합 비활성화 시 즉시 처리
     if not merge_enabled:
-        await _process_text_message(text, update)
+        try:
+            await _process_text_message(text, update)
+        except Exception as e:
+            logger.error(f"메시지 처리 실패: {text[:80]}... - {e}", exc_info=True)
+            await update.message.reply_text(f"[오류] 처리 실패: {e}")
         return
 
     # 병합 모드: 버퍼에 추가하고 타이머 리셋
@@ -506,8 +513,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _merge_buffers[user_id] = {"messages": [text], "update": update}
 
     async def _timer():
-        await asyncio.sleep(MESSAGE_MERGE_WAIT)
-        await _flush_merge_buffer(user_id)
+        try:
+            await asyncio.sleep(MESSAGE_MERGE_WAIT)
+            await _flush_merge_buffer(user_id)
+        except Exception as e:
+            logger.error(f"메시지 병합 처리 실패: user={user_id} - {e}", exc_info=True)
 
     _merge_buffers[user_id]["task"] = asyncio.create_task(_timer())
 
@@ -605,7 +615,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"[완료] {result['title']}")
 
         # 임시 파일 삭제
-        os.remove(temp_path)
+        try:
+            os.remove(temp_path)
+        except OSError as e:
+            logger.warning(f"임시 이미지 삭제 실패: {temp_path} - {e}")
 
     except Exception as e:
         logger.error(f"이미지 처리 실패: {e}", exc_info=True)
@@ -615,7 +628,10 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_tip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Claude Code 팁 처리 콜백 (Global 반영 / Skill 제작 / 스킵)."""
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"콜백 응답 실패: {e}")
 
     data = query.data
     if not data or ":" not in data:

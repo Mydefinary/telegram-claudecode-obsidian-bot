@@ -171,7 +171,8 @@ def save_tip_to_pool(tip: str, tip_desc: str, source_title: str, skill_name: str
             with open(os.path.join(TIPS_DIR, f), "r", encoding="utf-8") as fh:
                 if tip in fh.read():
                     return False
-        except Exception:
+        except Exception as e:
+            logger.warning(f"팁 중복 체크 시 파일 읽기 실패: {f} - {e}")
             continue
 
     from datetime import datetime

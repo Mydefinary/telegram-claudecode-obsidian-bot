@@ -62,10 +62,25 @@
      → Empty string now correctly passes `--allowedTools ""` to disable all tools
    - analyzer.py: Added proc.kill() + proc.wait() on timeout to prevent zombie processes
 
+9. [Error Logging Hardening] Added error handling + logging to 9 vulnerable points
+   - bot.py: _show_tip_prompt() — try/except to prevent tip send failure from breaking eval
+   - bot.py: handle_message() — error handling when merge disabled (no-merge direct path)
+   - bot.py: _timer() — asyncio task exception logging (previously silently swallowed)
+   - bot.py: handle_photo() os.remove — catch OSError on temp file cleanup
+   - bot.py: handle_tip_callback() query.answer() — catch callback ack failure
+   - scraper.py: soup.title — use get_text() instead of .string (handles complex title tags)
+   - obsidian_writer.py: get_existing_urls() — log warning on file read failure
+   - obsidian_writer.py: get_existing_notes_summary() — log warning on file read failure
+   - evaluator.py: save_tip_to_pool() — log warning on tip dedup file read failure
+
+10. [PM2 Daemon] Switch from start_hidden.vbs to pm2 process manager
+    - ecosystem.config.cjs: pm2 configuration (autorestart, log rotation)
+    - pm2-windows-startup: auto-start on Windows reboot via registry
+
 ========================================
  Files Changed
 ========================================
-New:     start_hidden.vbs, logs/ (created at runtime)
+New:     start_hidden.vbs, ecosystem.config.cjs, logs/ (created at runtime)
 Modified: bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
           scraper.py, .gitignore, .env.example, LICENSE, README.md, README_ko.md
 
@@ -134,9 +149,24 @@ Modified: bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
      → 빈 문자열도 `--allowedTools ""`로 CLI에 전달하여 도구 사용 차단
    - analyzer.py: 타임아웃 시 proc.kill() + proc.wait() 추가로 좀비 프로세스 방지
 
+9. [에러 로깅 보강] 9개 취약 지점에 에러 핸들링 + 로깅 추가
+   - bot.py: _show_tip_prompt() — 팁 전송 실패가 평가 저장을 중단하지 않도록 try/except
+   - bot.py: handle_message() — 병합 비활성 시 직접 처리 경로에 에러 핸들링 추가
+   - bot.py: _timer() — asyncio task 내 예외 로깅 (기존: 조용히 소멸)
+   - bot.py: handle_photo() os.remove — 임시 파일 삭제 실패 시 OSError 캐치
+   - bot.py: handle_tip_callback() query.answer() — 콜백 응답 실패 캐치
+   - scraper.py: soup.title — .string 대신 get_text() 사용 (복합 title 태그 대응)
+   - obsidian_writer.py: get_existing_urls() — 파일 읽기 실패 시 경고 로깅
+   - obsidian_writer.py: get_existing_notes_summary() — 파일 읽기 실패 시 경고 로깅
+   - evaluator.py: save_tip_to_pool() — 팁 중복 체크 시 파일 읽기 실패 경고 로깅
+
+10. [PM2 데몬 전환] start_hidden.vbs에서 pm2 프로세스 매니저로 전환
+    - ecosystem.config.cjs: pm2 설정 (자동 재시작, 로그 회전)
+    - pm2-windows-startup: Windows 재부팅 시 레지스트리 통한 자동 시작
+
 ========================================
  변경 파일 목록
 ========================================
-신규:  start_hidden.vbs, logs/ (런타임 생성)
+신규:  start_hidden.vbs, ecosystem.config.cjs, logs/ (런타임 생성)
 수정:  bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
        scraper.py, .gitignore, .env.example, LICENSE, README.md, README_ko.md

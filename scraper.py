@@ -40,7 +40,10 @@ async def fetch_page_content(url: str) -> dict:
     for tag in soup(["script", "style", "nav", "footer", "header", "aside", "iframe"]):
         tag.decompose()
 
-    title = soup.title.string.strip() if soup.title and soup.title.string else ""
+    try:
+        title = soup.title.get_text(strip=True) if soup.title else ""
+    except Exception:
+        title = ""
 
     # 본문 추출 (article 우선, 없으면 body)
     article = soup.find("article") or soup.find("main") or soup.body

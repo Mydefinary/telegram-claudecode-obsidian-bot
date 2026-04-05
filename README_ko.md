@@ -77,6 +77,7 @@ telegram-obsidian-bot/
 ├── backfill_tags.py        # 기존 팁 태그 소급 생성 스크립트
 ├── Dockerfile              # Docker 이미지 빌드
 ├── docker-compose.yml      # Docker Compose 설정
+├── ecosystem.config.cjs    # PM2 데몬 설정
 ├── start.bat               # Windows 실행 (콘솔 표시)
 ├── start_hidden.vbs        # Windows 백그라운드 실행 (콘솔 없음)
 ├── logs/                   # 런타임 로그 (bot.log + error.log, git 미추적)
@@ -131,6 +132,14 @@ cp .env.example .env
 
 ```bash
 python bot.py
+```
+
+또는 PM2로 백그라운드 데몬 실행 (권장):
+
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save                          # 프로세스 목록 저장
+pm2-startup install               # Windows 재부팅 시 자동 시작
 ```
 
 또는 Windows에서:
@@ -195,6 +204,7 @@ python backfill_tags.py         # 기존 팁 파일에 태그 소급 생성
 | 분석 엔진 | Claude Code CLI / Anthropic API / OpenAI API (선택) |
 | 환경변수 | python-dotenv |
 | 노트 저장 | 옵시디언 vault에 직접 마크다운 파일 생성 |
+| 프로세스 관리 | PM2 (데몬 모드, 자동 재시작) |
 | 컨테이너 | Docker + Docker Compose |
 
 ## 라이선스

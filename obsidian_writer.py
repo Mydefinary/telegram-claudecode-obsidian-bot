@@ -27,7 +27,8 @@ def get_existing_urls() -> set:
                         break
                     if line.strip() == "---" and urls:
                         break
-        except Exception:
+        except Exception as e:
+            logger.warning(f"노트 URL 읽기 실패: {f} - {e}")
             continue
     return urls
 
@@ -79,7 +80,8 @@ def get_existing_notes_summary() -> list[dict]:
                 "url": url,
                 "preview": body_preview,
             })
-        except Exception:
+        except Exception as e:
+            logger.warning(f"노트 요약 읽기 실패: {f} - {e}")
             continue
     return notes
 
