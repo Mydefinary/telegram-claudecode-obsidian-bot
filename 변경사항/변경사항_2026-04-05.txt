@@ -1,4 +1,69 @@
 ========================================
+ Changelog (2026-04-05)
+========================================
+
+1. [start_hidden.vbs] Background execution VBS script
+   - Runs bot without console window using pythonw
+   - Auto-sets working directory relative to script location
+
+2. [My Thoughts] Personal thoughts extraction from Telegram messages
+   - bot.py: Added split_my_thoughts() function
+   - bot.py: process_single_item() separates thoughts and passes to save_note
+   - obsidian_writer.py: Added my_thoughts parameter to save_note()
+   - obsidian_writer.py: Dedicated "My Thoughts" section preserving full text
+   - obsidian_writer.py: Auto-adds tags: [my-thought] in frontmatter
+   - Usage: Append "내생각: content" at end of message
+
+3. [Structured Logging] Added logging across all modules
+   - config.py: Centralized logging config (RotatingFileHandler)
+     - logs/bot.log (all logs, 5MB rotation, 5 backups)
+     - logs/error.log (errors only, 5MB rotation, 3 backups)
+   - bot.py: Removed basicConfig, added exc_info=True stack traces to all errors
+   - scraper.py: Fetch failure error logs
+   - analyzer.py: CLI/API call start/failure/timeout/response logs
+   - evaluator.py: Evaluation start/complete, tip/skill save, file I/O errors
+   - obsidian_writer.py: Note save/supplement/image copy success/failure
+   - .gitignore: Added logs/ folder
+
+4. [Text Analysis Timeout Fix] Per-task tool separation + text length limit
+   - Root cause: Claude CLI used WebFetch/WebSearch unnecessarily during text analysis
+                 -> Attempted to search keywords mentioned in text -> 180s timeout
+   - analyzer.py: Added allowed_tools parameter to _run_claude_cli()
+   - Text analysis: No tools + 6000 char truncation
+   - Image analysis: Read only
+   - Dedup check: No tools
+   - Evaluation: No tools
+   - Link analysis: WebFetch,WebSearch,Read (unchanged)
+
+5. [Message Auto-Merge] Handle Telegram character limit for long texts
+   - config.py: Added MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT settings
+   - bot.py: _merge_buffers dict for per-user message buffering
+   - bot.py: _flush_merge_buffer() processes merged text on timer expiry
+   - bot.py: _process_text_message() extracted for shared logic
+   - bot.py: /merge command to toggle ON/OFF
+   - bot.py: /help shows merge status
+   - .env.example: Added merge settings
+   - Default 5s wait, shows "[N messages merged]" notification
+
+6. [License Change] MIT -> BSL 1.1
+   - LICENSE: Replaced with Business Source License 1.1
+   - Personal/non-commercial use permitted, commercial use requires separate license
+   - Auto-converts to Apache 2.0 after 2030-04-05
+
+7. [README Update] All new features documented
+   - README.md: Updated license badge, added 5 new features, expanded config table
+   - README_ko.md: Same updates in Korean
+   - .env.example: Added MESSAGE_MERGE settings
+
+========================================
+ Files Changed
+========================================
+New:     start_hidden.vbs, logs/ (created at runtime)
+Modified: bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
+          scraper.py, .gitignore, .env.example, LICENSE, README.md, README_ko.md
+
+
+========================================
  변경사항 정리 (2026-04-05)
 ========================================
 
@@ -58,6 +123,6 @@
 ========================================
  변경 파일 목록
 ========================================
-신규:  start_hidden.vbs, logs/ (런타임 생성), changes_2026-04-05.txt
+신규:  start_hidden.vbs, logs/ (런타임 생성)
 수정:  bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
        scraper.py, .gitignore, .env.example, LICENSE, README.md, README_ko.md
