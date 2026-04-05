@@ -50,13 +50,16 @@ def remove_title_line(text: str) -> str:
 
 # ── Engine implementations ──
 
-async def _run_claude_cli(prompt: str) -> str:
+async def _run_claude_cli(prompt: str, allowed_tools: str = "WebFetch,WebSearch,Read") -> str:
     """Run analysis via Claude Code CLI (stdin pipe)."""
-    logger.debug("Claude CLI 호출 시작")
+    cmd = [CLAUDE_CMD, "-p", "-"]
+    if allowed_tools:
+        cmd += ["--allowedTools", allowed_tools]
+
+    logger.debug(f"Claude CLI 호출 시작 (tools={allowed_tools or 'none'})")
     try:
         proc = await asyncio.create_subprocess_exec(
-            CLAUDE_CMD, "-p", "-",
-            "--allowedTools", "WebFetch,WebSearch,Read",
+            *cmd,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -66,7 +69,7 @@ async def _run_claude_cli(prompt: str) -> str:
             timeout=180,
         )
     except asyncio.TimeoutError:
-        logger.error("Claude CLI 타임아웃 (180초 초과)")
+        logger.error(f"Claude CLI 타임아웃 (180초 초과), prompt={len(prompt)}자")
         raise
     except Exception as e:
         logger.error(f"Claude CLI 프로세스 실행 실패: {e}", exc_info=True)
@@ -134,14 +137,14 @@ async def _run_openai_api(prompt: str) -> str:
     return clean_analysis(result)
 
 
-async def _run_claude(prompt: str) -> str:
+async def _run_claude(prompt: str, allowed_tools: str = "WebFetch,WebSearch,Read") -> str:
     """Route to the configured analysis engine."""
     if ANALYSIS_ENGINE == "anthropic":
         return await _run_anthropic_api(prompt)
     elif ANALYSIS_ENGINE == "openai":
         return await _run_openai_api(prompt)
     else:
-        return await _run_claude_cli(prompt)
+        return await _run_claude_cli(prompt, allowed_tools=allowed_tools)
 
 
 # ── Dedup ──
@@ -168,7 +171,7 @@ async def check_duplicate_content(new_title: str, new_content: str, existing_not
         f"[Existing Notes]\n{notes_text}"
     )
 
-    raw = await _run_claude(prompt)
+    raw = await _run_claude(prompt, allowed_tools="")
 
     result = {"action": "new", "similar_file": "", "new_info": ""}
 
@@ -241,8 +244,11 @@ async def analyze_link_direct(url: str) -> dict:
 
 async def analyze_text(text: str) -> dict:
     """Analyze plain text."""
-    prompt = f"{TEXT_ANALYSIS_PROMPT}\n\n{text}"
-    result = await _run_claude(prompt)
+    # 텍스트 길이 제한 (링크 분석과 동일한 6000자)
+    truncated = text[:6000] + "\n...(truncated)" if len(text) > 6000 else text
+    prompt = f"{TEXT_ANALYSIS_PROMPT}\n\n{truncated}"
+    # 텍스트 분석은 내용이 이미 제공되므로 도구 불필요
+    result = await _run_claude(prompt, allowed_tools="")
 
     if is_analysis_failed(result):
         return {"title": "", "content": "", "failed": True}
@@ -262,7 +268,7 @@ async def analyze_image(image_path: str, caption: str = "") -> dict:
         f"Read and analyze this image file using the Read tool: {normalized_path}"
         f"{caption_part}"
     )
-    result = await _run_claude(prompt)
+    result = await _run_claude(prompt, allowed_tools="Read")
 
     ai_title = extract_title_from_analysis(result)
     body = remove_title_line(result)

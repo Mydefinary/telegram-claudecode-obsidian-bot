@@ -85,7 +85,7 @@ async def evaluate_note(title: str, content: str, url: str = "") -> dict:
         note_text = note_text[:4000] + "\n...(truncated)"
 
     prompt = f"{EVAL_PROMPT}\n\n--- Note to evaluate ---\n{note_text}"
-    raw = await _run_claude(prompt)
+    raw = await _run_claude(prompt, allowed_tools="")
     result = parse_eval_result(raw)
     logger.info(f"노트 평가 완료: {title} -> 등급 {result['grade']}")
     return result
