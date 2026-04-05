@@ -7,9 +7,18 @@ logger = logging.getLogger(__name__)
 
 URL_PATTERN = re.compile(r'https?://[^\s<>"{}|\\^`\[\]]+')
 
+# URL 끝에 붙는 불필요한 문자 (괄호, 구두점, 유니코드 제어문자 등)
+_URL_TRAIL_JUNK = re.compile(r'[)\]},;:!?.\'"]+$|[\ufffc\ufeff\u200b-\u200f\u202a-\u202e]+')
+
+
+def _clean_url(url: str) -> str:
+    """URL 끝의 괄호, 구두점, 유니코드 제어문자를 제거한다."""
+    return _URL_TRAIL_JUNK.sub('', url)
+
 
 def extract_urls(text: str) -> list[str]:
-    return URL_PATTERN.findall(text)
+    raw = URL_PATTERN.findall(text)
+    return [_clean_url(u) for u in raw]
 
 
 async def fetch_page_content(url: str) -> dict:
