@@ -19,7 +19,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 
 from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT  # noqa: E402
 from scraper import extract_urls, fetch_page_content
-from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, check_duplicate_content
+from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, analyze_youtube, check_duplicate_content, is_youtube_url
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
 from kakao_parser import is_kakao_format, parse_kakao_txt
 from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval
@@ -161,17 +161,25 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
 
             try:
                 logger.info(f"URL 처리 시작: {url}")
-                page = await fetch_page_content(url)
-                scraped_ok = not page["error"] and len(page.get("content", "").strip()) > 100
 
-                if page["error"]:
-                    logger.warning(f"스크래핑 오류 (fallback 분석): {url} - {page['error']}")
-
-                if scraped_ok:
-                    result = await analyze_link(url, page["title"], page["content"])
+                # YouTube는 Gemini로 분석
+                if is_youtube_url(url):
+                    logger.info(f"YouTube 감지, Gemini 분석: {url}")
+                    result = await analyze_youtube(url)
+                    page = {"title": "", "content": "", "error": ""}
+                    scraped_ok = False
                 else:
-                    logger.info(f"스크래핑 부족, Claude 직접 분석: {url}")
-                    result = await analyze_link_direct(url)
+                    page = await fetch_page_content(url)
+                    scraped_ok = not page["error"] and len(page.get("content", "").strip()) > 100
+
+                    if page["error"]:
+                        logger.warning(f"스크래핑 오류 (fallback 분석): {url} - {page['error']}")
+
+                    if scraped_ok:
+                        result = await analyze_link(url, page["title"], page["content"])
+                    else:
+                        logger.info(f"스크래핑 부족, Claude 직접 분석: {url}")
+                        result = await analyze_link_direct(url)
 
                 # 분석 실패 시 저장하지 않고 실패 목록에 추가
                 if result["failed"]:

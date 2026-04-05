@@ -2,7 +2,7 @@ import asyncio
 import logging
 import re
 
-from config import ANALYSIS_ENGINE, CLAUDE_CMD, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OPENAI_API_KEY, OPENAI_MODEL
+from config import ANALYSIS_ENGINE, CLAUDE_CMD, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OPENAI_API_KEY, OPENAI_MODEL, GEMINI_API_KEY, GEMINI_MODEL
 
 logger = logging.getLogger(__name__)
 from prompts import get_prompts
@@ -15,6 +15,15 @@ IMAGE_ANALYSIS_PROMPT = _prompts["image_analysis"]
 DEDUP_PROMPT = _prompts["dedup"]
 FAIL_PATTERNS = _prompts["fail_patterns"]
 META_PATTERNS = _prompts["meta_patterns"]
+
+_YOUTUBE_PATTERN = re.compile(
+    r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/shorts/|youtube\.com/live/)'
+)
+
+
+def is_youtube_url(url: str) -> bool:
+    """YouTube URL인지 판별한다."""
+    return bool(_YOUTUBE_PATTERN.search(url))
 
 
 def is_analysis_failed(text: str) -> bool:
@@ -134,6 +143,46 @@ async def _run_openai_api(prompt: str) -> str:
 
     result = response.choices[0].message.content
     logger.debug(f"OpenAI API 응답 수신: {len(result)}자")
+    return clean_analysis(result)
+
+
+async def _run_gemini_api(prompt: str, youtube_url: str = "") -> str:
+    """Run analysis via Google Gemini API. YouTube URL은 Part.from_uri로 직접 전달."""
+    try:
+        from google import genai
+        from google.genai.types import Part
+    except ImportError:
+        raise RuntimeError(
+            "google-genai package not installed. Run: pip install google-genai"
+        )
+
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    logger.debug(f"Gemini API 호출: model={GEMINI_MODEL}, youtube={bool(youtube_url)}")
+    try:
+        client = genai.Client(api_key=GEMINI_API_KEY)
+
+        if youtube_url:
+            # YouTube URL을 Part.from_uri로 직접 전달 → 영상 오디오+시각 분석
+            contents = [
+                Part.from_uri(file_uri=youtube_url, mime_type="video/mp4"),
+                prompt,
+            ]
+        else:
+            contents = prompt
+
+        response = await asyncio.to_thread(
+            client.models.generate_content,
+            model=GEMINI_MODEL,
+            contents=contents,
+        )
+    except Exception as e:
+        logger.error(f"Gemini API 호출 실패: {e}", exc_info=True)
+        raise
+
+    result = response.text
+    logger.debug(f"Gemini API 응답 수신: {len(result)}자")
     return clean_analysis(result)
 
 
@@ -273,3 +322,23 @@ async def analyze_image(image_path: str, caption: str = "") -> dict:
     ai_title = extract_title_from_analysis(result)
     body = remove_title_line(result)
     return {"title": ai_title or caption[:30] or "Image Analysis", "content": body, "failed": False}
+
+
+async def analyze_youtube(url: str) -> dict:
+    """Analyze YouTube video via Gemini API (Part.from_uri로 영상 직접 분석).
+    Returns: {"title": str, "content": str, "failed": bool}
+    """
+    logger.info(f"YouTube Gemini 분석: {url}")
+    prompt = LINK_ANALYSIS_PROMPT
+    try:
+        result = await _run_gemini_api(prompt, youtube_url=url)
+    except Exception as e:
+        logger.error(f"YouTube Gemini 분석 실패: {url} - {e}", exc_info=True)
+        return {"title": "", "content": "", "failed": True}
+
+    if is_analysis_failed(result):
+        return {"title": "", "content": "", "failed": True}
+
+    ai_title = extract_title_from_analysis(result)
+    body = remove_title_line(result)
+    return {"title": ai_title or "YouTube", "content": body, "failed": False}

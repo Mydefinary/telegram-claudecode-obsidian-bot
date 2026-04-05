@@ -69,6 +69,10 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-20250514")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
+# Gemini (YouTube fallback)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
 # Claude CLI path (auto-detect if not set)
 CLAUDE_CMD = os.getenv("CLAUDE_CMD", "")
 if not CLAUDE_CMD:
