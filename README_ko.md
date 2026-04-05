@@ -14,8 +14,11 @@
 - **이미지 분석** -- 이미지를 AI가 읽고 분석, 원본 이미지는 vault에 첨부
 - **txt 파일 일괄 처리** -- 파일 업로드 시 항목별로 큐 기반 병렬 처리 (동시 3개)
 - **카카오톡 대화 파싱** -- 카카오톡 내보내기 txt를 자동 감지하여 메시지 단위로 분석
+- **내 생각 저장** -- 메시지 끝에 `내생각:`을 붙이면 개인 생각을 별도 섹션으로 전문 보존 (`#my-thought` 태그 자동 추가)
+- **연속 메시지 자동 병합** -- 긴 글을 나눠 보내면 5초 대기 후 자동 합침 (`/merge`로 ON/OFF)
 - **내용 중복 비교** -- 기존 노트와 내용을 비교하여 신규/중복/보강 판정
 - **원본 저장** -- 분석 요약본과 함께 원본 콘텐츠를 접이식 callout으로 보관
+- **구조화 로깅** -- 회전형 파일 로그 (`logs/bot.log` + `logs/error.log`) + 스택트레이스 기록
 - **6항목 노트 평가** -- 최신성/실용성/신뢰도/깊이/개발자적합성/클코적용성 (30점 만점, A~D 등급)
 - **Claude Code 팁 4분기 처리** -- 팁 발견 시 텔레그램에서 Global 반영 / Skill 제작 / 팁 저장 / 스킵 선택
 - **팁 풀 + 태그 매칭** -- 저장된 팁을 `/apply-tips`로 프로젝트에 태그 기반 매칭 적용
@@ -74,7 +77,9 @@ telegram-obsidian-bot/
 ├── backfill_tags.py        # 기존 팁 태그 소급 생성 스크립트
 ├── Dockerfile              # Docker 이미지 빌드
 ├── docker-compose.yml      # Docker Compose 설정
-├── start.bat               # Windows 서비스 실행용 배치 파일
+├── start.bat               # Windows 실행 (콘솔 표시)
+├── start_hidden.vbs        # Windows 백그라운드 실행 (콘솔 없음)
+├── logs/                   # 런타임 로그 (bot.log + error.log, git 미추적)
 ├── requirements.txt        # 의존성
 ├── .env                    # 환경변수 (git 미추적)
 └── .env.example            # 환경변수 예시
@@ -119,6 +124,8 @@ cp .env.example .env
 | `OPENAI_API_KEY` | 엔진이 `openai`일 때 | - | OpenAI API 키 |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI 모델명 |
 | `CLAUDE_CMD` | No | 자동 감지 | Claude CLI 실행 경로 |
+| `MESSAGE_MERGE_ENABLED` | No | `true` | 연속 메시지 자동 병합 |
+| `MESSAGE_MERGE_WAIT` | No | `5` | 병합 대기 시간 (초) |
 
 ### 4. 실행
 
@@ -129,7 +136,8 @@ python bot.py
 또는 Windows에서:
 
 ```bash
-start.bat
+start.bat              # 콘솔 창 표시
+start_hidden.vbs       # 백그라운드 실행 (콘솔 없음)
 ```
 
 ### 5. Docker로 실행
@@ -154,13 +162,15 @@ python backfill_tags.py         # 기존 팁 파일에 태그 소급 생성
    - **텍스트** -- 내용을 정리하여 노트 생성
    - **이미지** -- 이미지를 분석하여 노트 생성 (원본 첨부)
    - **txt 파일** -- 항목별로 분할하여 병렬 분석 (카카오톡 내보내기 자동 감지)
-3. 분석 완료 후 옵시디언 vault의 저장 폴더에 마크다운 노트가 저장됩니다
-4. Claude Code 팁이 발견되면 텔레그램에서 4개 버튼으로 처리:
+3. 메시지 끝에 `내생각:`을 붙이면 개인 생각이 별도 섹션으로 저장됩니다
+4. 긴 글을 나눠 보내면 5초 대기 후 자동 병합됩니다 (`/merge`로 ON/OFF)
+5. 분석 완료 후 옵시디언 vault의 저장 폴더에 마크다운 노트가 저장됩니다
+6. Claude Code 팁이 발견되면 텔레그램에서 4개 버튼으로 처리:
    - **Global 반영** -- `~/.claude/CLAUDE.md`에 추가
    - **Skill 제작** -- `~/.claude/commands/`에 슬래시 커맨드 생성
    - **팁 저장** -- `~/.claude/tips/`에 태그와 함께 풀로 저장
    - **스킵** -- 옵시디언에만 보관
-5. 프로젝트에서 `/apply-tips` 실행 시 팁 풀에서 태그 기반으로 적합한 팁을 추천
+7. 프로젝트에서 `/apply-tips` 실행 시 팁 풀에서 태그 기반으로 적합한 팁을 추천
 
 ## 노트 평가 기준
 
@@ -189,4 +199,8 @@ python backfill_tags.py         # 기존 팁 파일에 태그 소급 생성
 
 ## 라이선스
 
-MIT License
+[Business Source License 1.1](LICENSE)
+
+- 개인 및 비상업적 사용 가능
+- 상업적 사용은 별도 라이센스 필요
+- 2030-04-05 이후 Apache 2.0으로 자동 전환

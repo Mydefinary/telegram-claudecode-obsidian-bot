@@ -3,7 +3,7 @@
 A Telegram bot that analyzes links, messages, images, and files with AI, then saves them as structured Obsidian notes.
 
 [![CI](https://github.com/Mydefinary/telegram-claudecode-obsidian-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/Mydefinary/telegram-claudecode-obsidian-bot/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: BSL 1.1](https://img.shields.io/badge/License-BSL_1.1-orange.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 [한국어 README](README_ko.md)
@@ -25,8 +25,11 @@ TODO: Add screenshots
 - **Image Analysis** -- AI reads and analyzes images; originals are attached to the vault
 - **Batch File Processing** -- Upload `.txt` files for queue-based parallel processing (3 concurrent by default)
 - **KakaoTalk Chat Parsing** -- Auto-detects KakaoTalk chat export format and parses messages individually
+- **My Thoughts** -- Append `내생각:` to save your personal thoughts in a dedicated section with `#my-thought` tag
+- **Message Auto-Merge** -- Split long texts across messages; bot waits 5s and merges them automatically (`/merge` to toggle)
 - **Content Deduplication** -- Compares against existing notes to determine new/duplicate/supplement status
 - **Original Content Preservation** -- Stores raw source content in collapsible Obsidian callouts alongside the analysis
+- **Structured Logging** -- Rotating file logs (`logs/bot.log` + `logs/error.log`) with full stack traces
 - **6-Criteria Note Evaluation** -- Freshness, Practicality, Reliability, Depth, Developer Relevance, Claude Code Applicability (30 points, A-D grades)
 - **Claude Code Tips Extraction** -- When tips are found, choose via Telegram inline buttons: Apply Globally / Create Skill / Save to Pool / Skip
 - **Tip Pool + Tag Matching** -- Saved tips can be applied to projects via `/apply-tips` with tag-based matching
@@ -96,6 +99,12 @@ See [Configuration](#configuration-1) for all available variables.
 python bot.py
 ```
 
+Or run in background on Windows (no console window):
+
+```
+start_hidden.vbs
+```
+
 ### Docker
 
 ```bash
@@ -117,6 +126,8 @@ docker compose up -d
 | `OPENAI_API_KEY` | If engine is `openai` | - | OpenAI API key |
 | `OPENAI_MODEL` | No | `gpt-4o` | OpenAI model name |
 | `CLAUDE_CMD` | No | Auto-detected | Path to Claude CLI executable |
+| `MESSAGE_MERGE_ENABLED` | No | `true` | Auto-merge consecutive messages |
+| `MESSAGE_MERGE_WAIT` | No | `5` | Seconds to wait before merging |
 
 ## Usage
 
@@ -126,13 +137,15 @@ docker compose up -d
    - **Text** -- Organizes the content into a structured note
    - **Image** -- Analyzes the image and generates a note (original attached)
    - **`.txt` file** -- Splits into items and processes in parallel (auto-detects KakaoTalk export format)
-3. The bot saves a markdown note to your Obsidian vault's configured folder
-4. If a Claude Code tip is detected, you get 4 inline buttons:
+3. Add `내생각:` at the end to save your personal thoughts alongside the analysis
+4. Long texts split across messages are auto-merged (5s wait; `/merge` to toggle)
+5. The bot saves a markdown note to your Obsidian vault's configured folder
+6. If a Claude Code tip is detected, you get 4 inline buttons:
    - **Apply Globally** -- Appends to `~/.claude/CLAUDE.md`
    - **Create Skill** -- Creates a slash command in `~/.claude/commands/`
    - **Save to Pool** -- Saves to `~/.claude/tips/` with tags for later matching
    - **Skip** -- Keeps the tip in the Obsidian note only
-5. Run `/apply-tips` in any project to get tag-matched tip recommendations from the pool
+7. Run `/apply-tips` in any project to get tag-matched tip recommendations from the pool
 
 ## Evaluation Criteria
 
@@ -172,7 +185,9 @@ telegram-obsidian-bot/
 ├── backfill_tags.py        # Backfill tags into existing tip files
 ├── Dockerfile              # Docker image build
 ├── docker-compose.yml      # Docker Compose configuration
-├── start.bat               # Windows startup script
+├── start.bat               # Windows startup script (with console)
+├── start_hidden.vbs        # Windows background startup (no console)
+├── logs/                   # Runtime logs (bot.log + error.log, git-ignored)
 ├── requirements.txt        # Python dependencies
 ├── .env.example            # Environment variable template
 └── README_ko.md            # Korean README
@@ -196,4 +211,8 @@ Contributions are welcome! Please open an issue or submit a pull request.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [Business Source License 1.1](LICENSE).
+
+- Personal and non-commercial use is permitted.
+- Commercial use requires a separate license from the author.
+- On 2030-04-05, the license automatically converts to Apache 2.0.

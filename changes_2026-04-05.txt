@@ -1,0 +1,63 @@
+========================================
+ 변경사항 정리 (2026-04-05)
+========================================
+
+1. [start_hidden.vbs] 백그라운드 실행 VBS 생성
+   - pythonw로 콘솔 창 없이 봇 실행
+   - 스크립트 위치 기준 작업 디렉토리 자동 설정
+
+2. [내생각 기능] 텔레그램 메시지에서 개인 생각 분리 저장
+   - bot.py: split_my_thoughts() 함수 추가
+   - bot.py: process_single_item()에서 내생각 분리 후 save_note에 전달
+   - obsidian_writer.py: save_note()에 my_thoughts 파라미터 추가
+   - obsidian_writer.py: "## 내 생각" 섹션으로 전문 보존
+   - obsidian_writer.py: 프론트매터에 tags: [my-thought] 자동 추가
+   - 사용법: 메시지 끝에 "내생각: 내용" 입력
+
+3. [로깅 체계 구축] 전체 모듈 구조화 로깅 추가
+   - config.py: 중앙 로깅 설정 (RotatingFileHandler)
+     - logs/bot.log (전체 로그, 5MB 회전, 5개 백업)
+     - logs/error.log (에러 전용, 5MB 회전, 3개 백업)
+   - bot.py: basicConfig 제거, 모든 에러에 exc_info=True 스택트레이스
+   - scraper.py: fetch 실패 에러 로그
+   - analyzer.py: CLI/API 호출 시작/실패/타임아웃/응답 로그
+   - evaluator.py: 평가 시작/완료, 팁/스킬 저장, 파일 I/O 에러
+   - obsidian_writer.py: 노트 저장/보강/이미지 복사 성공/실패
+   - .gitignore: logs/ 폴더 추가
+
+4. [텍스트 분석 타임아웃 해결] 용도별 도구 분리 + 텍스트 길이 제한
+   - 원인: 텍스트 분석 시 Claude CLI가 WebFetch/WebSearch 도구를 불필요하게 사용
+          -> 텍스트에 언급된 키워드를 검색하려 시도 -> 180초 타임아웃
+   - analyzer.py: _run_claude_cli()에 allowed_tools 파라미터 추가
+   - 텍스트 분석: 도구 없음 + 6000자 truncation
+   - 이미지 분석: Read만 허용
+   - 중복 체크: 도구 없음
+   - 평가: 도구 없음
+   - 링크 분석: WebFetch,WebSearch,Read (기존 유지)
+
+5. [연속 메시지 자동 병합] 텔레그램 글자수 제한 대응
+   - config.py: MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT 설정 추가
+   - bot.py: _merge_buffers 딕셔너리로 유저별 메시지 버퍼링
+   - bot.py: _flush_merge_buffer()로 타이머 만료 시 합쳐서 처리
+   - bot.py: _process_text_message()로 처리 로직 분리 (중복 제거)
+   - bot.py: /merge 명령으로 ON/OFF 토글
+   - bot.py: /help에 병합 상태 표시
+   - .env.example: 병합 설정 추가
+   - 기본 5초 대기, 2개 이상 병합 시 "[N개 메시지 병합]" 알림
+
+6. [라이센스 변경] MIT -> BSL 1.1
+   - LICENSE: Business Source License 1.1 전문으로 교체
+   - 개인/비상업적 사용 허용, 상업적 사용 별도 라이센스 필요
+   - 2030-04-05 이후 Apache 2.0으로 자동 전환
+
+7. [README 업데이트] 오늘 추가한 기능 전부 반영
+   - README.md: 라이센스 배지 변경, 새 기능 5개 추가, 설정 테이블 확장
+   - README_ko.md: 동일 내용 한국어 반영
+   - .env.example: MESSAGE_MERGE 설정 추가
+
+========================================
+ 변경 파일 목록
+========================================
+신규:  start_hidden.vbs, logs/ (런타임 생성), changes_2026-04-05.txt
+수정:  bot.py, config.py, analyzer.py, evaluator.py, obsidian_writer.py,
+       scraper.py, .gitignore, .env.example, LICENSE, README.md, README_ko.md

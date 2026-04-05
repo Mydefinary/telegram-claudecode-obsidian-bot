@@ -21,7 +21,7 @@ python -m py_compile bot.py              # Lint a single file (CI uses this for 
 
 CI (.github/workflows/ci.yml) runs py_compile on all .py files + pytest on Python 3.11 and 3.13.
 
-## Architecture
+## Architecture텔
 
 The bot follows a linear pipeline: **Telegram input → scraping → AI analysis → dedup → Obsidian save → evaluation → tip processing**.
 
