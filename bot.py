@@ -17,7 +17,7 @@ sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='repla
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT  # noqa: E402 (config initializes logging)
+from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT  # noqa: E402
 from scraper import extract_urls, fetch_page_content
 from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, check_duplicate_content
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
@@ -116,6 +116,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    merge_state = "ON" if merge_enabled else "OFF"
     await update.message.reply_text(
         "사용법:\n"
         "- URL 보내기 -> 사이트 분석 후 옵시디언 노트 생성\n"
@@ -124,7 +125,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "txt 파일 형식:\n"
         "- 한 줄에 URL 하나 -> 각각 개별 링크 분석\n"
         "- 빈 줄로 구분된 텍스트 블록 -> 블록별 분석\n"
-        "- 혼합 가능 (URL과 텍스트 섞어도 OK)"
+        "- 혼합 가능 (URL과 텍스트 섞어도 OK)\n\n"
+        f"/merge - 메시지 병합 ON/OFF (현재: {merge_state}, {MESSAGE_MERGE_WAIT}초 대기)"
     )
 
 
@@ -323,14 +325,15 @@ def parse_txt_items(text: str) -> list[str]:
     return items
 
 
-# ── 핸들러 ──
+# ── 메시지 병합 ──
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """텍스트 메시지를 받아 분석하고 옵시디언에 저장한다."""
-    text = update.message.text
-    if not text or len(text.strip()) < 5:
-        return
+merge_enabled = MESSAGE_MERGE_ENABLED
+# {user_id: {"messages": [str], "task": asyncio.Task, "update": Update}}
+_merge_buffers: dict = {}
 
+
+async def _process_text_message(text: str, update: Update):
+    """텍스트를 분석하고 옵시디언에 저장한다."""
     urls = extract_urls(text)
 
     if urls:
@@ -343,6 +346,61 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_single_item(text, update, asyncio.Semaphore(1), failed_urls)
         if failed_urls:
             await update.message.reply_text("[처리 실패]\n" + "\n".join(f"- {u}" for u in failed_urls))
+
+
+async def _flush_merge_buffer(user_id: int):
+    """타이머 만료 시 버퍼의 메시지를 합쳐서 처리한다."""
+    buf = _merge_buffers.pop(user_id, None)
+    if not buf:
+        return
+
+    combined = "\n\n".join(buf["messages"])
+    update = buf["update"]
+    count = len(buf["messages"])
+
+    if count > 1:
+        logger.info(f"메시지 병합: user={user_id}, {count}개 -> {len(combined)}자")
+        await update.message.reply_text(f"[{count}개 메시지 병합]")
+
+    await _process_text_message(combined, update)
+
+
+async def toggle_merge(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """메시지 병합 기능 토글."""
+    global merge_enabled
+    merge_enabled = not merge_enabled
+    state = "ON" if merge_enabled else "OFF"
+    await update.message.reply_text(f"메시지 병합: {state} ({MESSAGE_MERGE_WAIT}초 대기)")
+
+
+# ── 핸들러 ──
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """텍스트 메시지를 받아 분석하고 옵시디언에 저장한다."""
+    text = update.message.text
+    if not text or len(text.strip()) < 5:
+        return
+
+    # 병합 비활성화 시 즉시 처리
+    if not merge_enabled:
+        await _process_text_message(text, update)
+        return
+
+    # 병합 모드: 버퍼에 추가하고 타이머 리셋
+    user_id = update.message.from_user.id
+
+    if user_id in _merge_buffers:
+        _merge_buffers[user_id]["task"].cancel()
+        _merge_buffers[user_id]["messages"].append(text)
+        _merge_buffers[user_id]["update"] = update
+    else:
+        _merge_buffers[user_id] = {"messages": [text], "update": update}
+
+    async def _timer():
+        await asyncio.sleep(MESSAGE_MERGE_WAIT)
+        await _flush_merge_buffer(user_id)
+
+    _merge_buffers[user_id]["task"] = asyncio.create_task(_timer())
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -506,6 +564,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("merge", toggle_merge))
     app.add_handler(CallbackQueryHandler(handle_tip_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))

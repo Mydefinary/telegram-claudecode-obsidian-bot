@@ -58,6 +58,10 @@ OBSIDIAN_FOLDER = os.getenv("OBSIDIAN_FOLDER", "텔레그램")
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "3"))
 LANGUAGE = os.getenv("LANGUAGE", "ko")  # ko, en
 
+# Message merge (연속 메시지 자동 병합)
+MESSAGE_MERGE_ENABLED = os.getenv("MESSAGE_MERGE_ENABLED", "true").lower() == "true"
+MESSAGE_MERGE_WAIT = int(os.getenv("MESSAGE_MERGE_WAIT", "5"))
+
 # Analysis engine: "claude-cli", "anthropic", "openai"
 ANALYSIS_ENGINE = os.getenv("ANALYSIS_ENGINE", "claude-cli")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
