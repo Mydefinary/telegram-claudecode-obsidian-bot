@@ -693,9 +693,9 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """글로벌 에러 핸들러: 봇 인스턴스 충돌, 네트워크 오류 등을 graceful하게 처리."""
     error = context.error
 
-    # 봇 인스턴스 충돌 (다른 getUpdates 요청에 의해 종료됨)
+    # 봇 인스턴스 충돌 (다른 getUpdates 요청에 의해 종료됨) — 메시지 유실 가능
     if isinstance(error, Conflict):
-        logger.warning("봇 인스턴스 충돌 감지 (다른 인스턴스 실행 중). 무시합니다.")
+        logger.error("봇 인스턴스 충돌 감지 — 다른 인스턴스가 실행 중입니다. 중복 프로세스를 종료하세요.")
         return
 
     # 네트워크 일시 장애 (DNS, 연결 실패 등) — 자동 재시도됨
