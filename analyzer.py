@@ -60,44 +60,50 @@ def remove_title_line(text: str) -> str:
 
 # ── Engine implementations ──
 
-async def _run_claude_cli(prompt: str, allowed_tools: str | None = "WebFetch,WebSearch,Read") -> str:
-    """Run analysis via Claude Code CLI (stdin pipe)."""
+async def _run_claude_cli(prompt: str, allowed_tools: str | None = "WebFetch,WebSearch,Read", timeout: int = 180) -> str:
+    """Run analysis via Claude Code CLI (stdin pipe). 타임아웃 시 1회 재시도 (timeout 증가)."""
     cmd = [CLAUDE_CMD, "-p", "-"]
     if allowed_tools is not None:
         cmd += ["--allowedTools", allowed_tools]
 
-    logger.debug(f"Claude CLI 호출 시작 (tools={allowed_tools or 'none'})")
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(input=prompt.encode("utf-8")),
-            timeout=180,
-        )
-    except asyncio.TimeoutError:
-        logger.error(f"Claude CLI 타임아웃 (180초 초과), prompt={len(prompt)}자")
+    for attempt in range(2):
+        current_timeout = timeout if attempt == 0 else timeout + 120
+        logger.debug(f"Claude CLI 호출 (attempt={attempt + 1}, timeout={current_timeout}s, tools={allowed_tools or 'none'})")
         try:
-            proc.kill()
-            await proc.wait()
-        except Exception:
-            pass
-        raise
-    except Exception as e:
-        logger.error(f"Claude CLI 프로세스 실행 실패: {e}", exc_info=True)
-        raise
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(input=prompt.encode("utf-8")),
+                timeout=current_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Claude CLI 타임아웃 ({current_timeout}초 초과, attempt={attempt + 1}), prompt={len(prompt)}자")
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            if attempt == 0:
+                logger.info("Claude CLI 재시도 (타임아웃 증가)")
+                continue
+            logger.error(f"Claude CLI 최종 타임아웃 실패, prompt={len(prompt)}자")
+            raise
+        except Exception as e:
+            logger.error(f"Claude CLI 프로세스 실행 실패: {e}", exc_info=True)
+            raise
 
-    if proc.returncode != 0:
-        error_msg = stderr.decode("utf-8", errors="replace").strip()
-        logger.error(f"Claude CLI 비정상 종료 (code={proc.returncode}): {error_msg}")
-        raise RuntimeError(f"Claude CLI error: {error_msg}")
+        if proc.returncode != 0:
+            error_msg = stderr.decode("utf-8", errors="replace").strip()
+            logger.error(f"Claude CLI 비정상 종료 (code={proc.returncode}): {error_msg}")
+            raise RuntimeError(f"Claude CLI error: {error_msg}")
 
-    result = stdout.decode("utf-8", errors="replace").strip()
-    logger.debug(f"Claude CLI 응답 수신: {len(result)}자")
-    return clean_analysis(result)
+        result = stdout.decode("utf-8", errors="replace").strip()
+        logger.debug(f"Claude CLI 응답 수신: {len(result)}자")
+        return clean_analysis(result)
 
 
 async def _run_anthropic_api(prompt: str) -> str:
@@ -332,18 +338,28 @@ async def analyze_image(image_path: str, caption: str = "") -> dict:
 
 async def analyze_youtube(url: str) -> dict:
     """Analyze YouTube video via Gemini API (Part.from_uri로 영상 직접 분석).
+    Gemini 실패 시 Claude CLI로 폴백.
     Returns: {"title": str, "content": str, "failed": bool}
     """
     logger.info(f"YouTube Gemini 분석: {url}")
     prompt = LINK_ANALYSIS_PROMPT
-    try:
-        result = await _run_gemini_api(prompt, youtube_url=url)
-    except Exception as e:
-        logger.error(f"YouTube Gemini 분석 실패: {url} - {e}", exc_info=True)
-        return {"title": "", "content": "", "failed": True}
+    result = None
 
-    if is_analysis_failed(result):
-        return {"title": "", "content": "", "failed": True}
+    # 1차: Gemini 시도
+    if GEMINI_API_KEY:
+        try:
+            result = await _run_gemini_api(prompt, youtube_url=url)
+        except Exception as e:
+            logger.warning(f"YouTube Gemini 실패, Claude 폴백: {url} - {e}")
+
+    # 2차: Gemini 실패 또는 미설정 시 Claude CLI 직접 분석
+    if not result or is_analysis_failed(result):
+        logger.info(f"YouTube Claude 폴백 분석: {url}")
+        try:
+            return await analyze_link_direct(url)
+        except Exception as e:
+            logger.error(f"YouTube 분석 최종 실패: {url} - {e}", exc_info=True)
+            return {"title": "", "content": "", "failed": True}
 
     ai_title = extract_title_from_analysis(result)
     body = remove_title_line(result)

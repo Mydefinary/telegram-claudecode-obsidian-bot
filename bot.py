@@ -15,6 +15,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import Conflict, NetworkError, TimedOut, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT  # noqa: E402
@@ -688,6 +689,41 @@ async def handle_tip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.edit_message_text(f"[스킵] 팁 미적용: {tip_data['tip']}")
 
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """글로벌 에러 핸들러: 봇 인스턴스 충돌, 네트워크 오류 등을 graceful하게 처리."""
+    error = context.error
+
+    # 봇 인스턴스 충돌 (다른 getUpdates 요청에 의해 종료됨)
+    if isinstance(error, Conflict):
+        logger.warning("봇 인스턴스 충돌 감지 (다른 인스턴스 실행 중). 무시합니다.")
+        return
+
+    # 네트워크 일시 장애 (DNS, 연결 실패 등) — 자동 재시도됨
+    if isinstance(error, NetworkError):
+        logger.warning(f"네트워크 오류 (자동 재시도): {error}")
+        return
+
+    # 텔레그램 타임아웃 — 자동 재시도됨
+    if isinstance(error, TimedOut):
+        logger.warning(f"텔레그램 요청 타임아웃: {error}")
+        return
+
+    # Rate limit — 대기 후 재시도
+    if isinstance(error, RetryAfter):
+        logger.warning(f"Rate limit, {error.retry_after}초 대기 필요")
+        return
+
+    # 그 외 예상치 못한 에러
+    logger.error(f"처리되지 않은 에러: {error}", exc_info=context.error)
+
+    # 사용자에게 에러 알림 시도
+    if update and isinstance(update, Update) and update.effective_message:
+        try:
+            await update.effective_message.reply_text("[오류] 처리 중 문제가 발생했습니다. 다시 시도해주세요.")
+        except Exception:
+            pass
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다. .env 파일을 확인하세요.")
@@ -703,8 +739,11 @@ def main():
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+    # 글로벌 에러 핸들러 등록
+    app.add_error_handler(error_handler)
+
     print("[BOT] 시작! 텔레그램에서 메시지를 보내세요.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 
 if __name__ == "__main__":

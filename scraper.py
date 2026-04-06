@@ -22,18 +22,30 @@ def extract_urls(text: str) -> list[str]:
     return [_clean_url(u) for u in raw]
 
 
+_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15",
+]
+
+
 async def fetch_page_content(url: str) -> dict:
-    """URL에서 페이지 제목과 본문 텍스트를 추출한다."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-    }
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-            resp = await client.get(url, headers=headers)
-            resp.raise_for_status()
-    except Exception as e:
-        logger.error(f"페이지 fetch 실패: {url} - {e}", exc_info=True)
-        return {"url": url, "title": "", "content": "", "error": str(e)}
+    """URL에서 페이지 제목과 본문 텍스트를 추출한다. 403 시 다른 User-Agent로 1회 재시도."""
+    for attempt, ua in enumerate(_USER_AGENTS):
+        headers = {"User-Agent": ua, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"}
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+            break
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403 and attempt == 0:
+                logger.info(f"403 발생, User-Agent 변경 후 재시도: {url}")
+                continue
+            logger.error(f"페이지 fetch 실패: {url} - {e}", exc_info=True)
+            return {"url": url, "title": "", "content": "", "error": str(e)}
+        except Exception as e:
+            logger.error(f"페이지 fetch 실패: {url} - {e}", exc_info=True)
+            return {"url": url, "title": "", "content": "", "error": str(e)}
 
     soup = BeautifulSoup(resp.text, "html.parser")
 
