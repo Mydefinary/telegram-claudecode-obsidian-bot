@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import re
+import sys
+import subprocess
 
 from config import ANALYSIS_ENGINE, CLAUDE_CMD, ANTHROPIC_API_KEY, ANTHROPIC_MODEL, OPENAI_API_KEY, OPENAI_MODEL, GEMINI_API_KEY, GEMINI_MODEL
 
@@ -70,11 +72,16 @@ async def _run_claude_cli(prompt: str, allowed_tools: str | None = "WebFetch,Web
         current_timeout = timeout if attempt == 0 else timeout + 120
         logger.debug(f"Claude CLI 호출 (attempt={attempt + 1}, timeout={current_timeout}s, tools={allowed_tools or 'none'})")
         try:
+            # Windows에서 콘솔 창 팝업 방지
+            kwargs = {}
+            if sys.platform == "win32":
+                kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                **kwargs,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(input=prompt.encode("utf-8")),
@@ -228,8 +235,8 @@ async def check_duplicate_content(new_title: str, new_content: str, existing_not
 
     prompt = (
         f"{DEDUP_PROMPT}\n\n"
-        f"[New Content]\nTitle: {new_title}\nContent:\n{new_preview}\n\n"
-        f"[Existing Notes]\n{notes_text}"
+        f"<new_content>\nTitle: {new_title}\nContent:\n{new_preview}\n</new_content>\n\n"
+        f"<existing_notes>\n{notes_text}\n</existing_notes>"
     )
 
     raw = await _run_claude(prompt, allowed_tools="")
@@ -268,13 +275,15 @@ async def analyze_link(url: str, title: str, content: str) -> dict:
     if content and len(content.strip()) > 100:
         prompt = (
             f"{LINK_ANALYSIS_PROMPT}\n\n"
-            f"URL: {url}\nTitle: {title}\n\nBody:\n{content}"
+            f"<user_input>\n<url>{url}</url>\n<title>{title}</title>\n"
+            f"<body>\n{content}\n</body>\n</user_input>"
         )
     else:
         prompt = (
             f"{LINK_ANALYSIS_PROMPT}\n\n"
-            f"Fetch and analyze the content from this URL using the WebFetch tool: {url}\n"
-            f"Reference title: {title}"
+            f"Fetch and analyze the content from this URL using the WebFetch tool:\n"
+            f"<user_input><url>{url}</url></user_input>\n"
+            f"Reference title: <user_input>{title}</user_input>"
         )
 
     result = await _run_claude(prompt)
@@ -291,7 +300,8 @@ async def analyze_link_direct(url: str) -> dict:
     """Analyze URL directly via Claude (no scraping)."""
     prompt = (
         f"{LINK_ANALYSIS_PROMPT}\n\n"
-        f"Fetch and analyze the content from this URL using the WebFetch tool: {url}"
+        f"Fetch and analyze the content from this URL using the WebFetch tool:\n"
+        f"<user_input><url>{url}</url></user_input>"
     )
     result = await _run_claude(prompt)
 
@@ -307,7 +317,7 @@ async def analyze_text(text: str) -> dict:
     """Analyze plain text."""
     # 텍스트 길이 제한 (링크 분석과 동일한 6000자)
     truncated = text[:6000] + "\n...(truncated)" if len(text) > 6000 else text
-    prompt = f"{TEXT_ANALYSIS_PROMPT}\n\n{truncated}"
+    prompt = f"{TEXT_ANALYSIS_PROMPT}\n\n<user_input>\n{truncated}\n</user_input>"
     # 텍스트 분석은 내용이 이미 제공되므로 도구 불필요
     result = await _run_claude(prompt, allowed_tools="")
 
@@ -323,7 +333,7 @@ async def analyze_text(text: str) -> dict:
 async def analyze_image(image_path: str, caption: str = "") -> dict:
     """Analyze an image."""
     normalized_path = image_path.replace("\\", "/")
-    caption_part = f"\nUser caption: {caption}" if caption else ""
+    caption_part = f"\n<caption>{caption}</caption>" if caption else ""
     prompt = (
         f"{IMAGE_ANALYSIS_PROMPT}\n\n"
         f"Read and analyze this image file using the Read tool: {normalized_path}"
@@ -397,8 +407,8 @@ async def analyze_github(url: str) -> dict:
 
     prompt = (
         f"{GITHUB_ANALYSIS_PROMPT}\n\n"
-        f"## Repository Information\n{meta_section}\n\n"
-        f"## README\n{readme}"
+        f"<user_input>\n## Repository Information\n{meta_section}\n\n"
+        f"## README\n{readme}\n</user_input>"
     )
 
     result = await _run_claude(prompt, allowed_tools="")

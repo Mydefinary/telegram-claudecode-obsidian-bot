@@ -1,0 +1,101 @@
+========================================
+ Changelog (2026-04-06)
+========================================
+
+[Part 1: Error Log Analysis & Stability]
+
+1. [Global Error Handler] Registered error_handler in bot.py
+   - Handles Conflict (bot instance collision), NetworkError, TimedOut, RetryAfter
+   - Conflict logged as ERROR (message loss risk), others as WARNING
+   - Added drop_pending_updates=True to prevent restart conflicts
+
+2. [Claude CLI Timeout Retry] analyzer.py _run_claude_cli
+   - 1 retry on timeout: 180s first attempt → 300s retry
+   - Process killed on timeout to prevent zombie processes
+
+3. [YouTube Gemini Fallback] analyzer.py analyze_youtube
+   - Falls back to Claude CLI analyze_link_direct when Gemini fails
+   - Handles google-genai not installed / token limit exceeded
+
+4. [Scraper 403 Retry] scraper.py fetch_page_content
+   - Retries with alternate User-Agent on 403 Forbidden
+   - Added Accept/Accept-Language headers
+
+[Part 2: Security Patch]
+
+5. [User Whitelist] ALLOWED_USER_IDS environment variable
+   - config.py: Parses comma-separated Telegram user IDs
+   - bot.py: _is_user_allowed() check on all handlers
+   - Empty = allow all (backwards compatible)
+
+6. [Prompt Injection Defense] XML tag isolation
+   - analyzer.py: All user inputs wrapped in <user_input> tags
+   - Separates system prompt from user-provided content
+
+7. [Error Message Sanitization] Internal info hidden from users
+   - bot.py: Replaced {e} in user-facing error messages with generic text
+   - Detailed errors logged only to log files
+
+8. [SSRF Protection] Internal IP blocking
+   - scraper.py: _is_safe_url() validates URL targets
+   - Blocks private, loopback, link-local, multicast IPs via DNS resolution
+
+9. [File Size Limit] DoS prevention
+   - config.py: MAX_FILE_SIZE (default 10MB)
+   - bot.py: Rejects oversized file uploads before download
+
+10. [Log URL Masking] Query string sanitization
+    - bot.py: _mask_url() strips query params from logged URLs
+    - Prevents API keys in URLs from leaking to log files
+
+11. [Terminal Popup Fix] Windows console window suppression
+    - analyzer.py: CREATE_NO_WINDOW flag for Claude CLI subprocess
+    - Prevents console popups during background PM2 operation
+
+========================================
+ 변경사항 정리 (2026-04-06)
+========================================
+
+[파트 1: 에러 로그 분석 기반 안정성 개선]
+
+1. [글로벌 에러 핸들러] bot.py에 error_handler 등록
+   - Conflict(인스턴스 충돌), NetworkError, TimedOut, RetryAfter 처리
+   - Conflict는 ERROR(메시지 유실), 나머지는 WARNING
+   - drop_pending_updates=True 추가
+
+2. [Claude CLI 타임아웃 재시도] analyzer.py _run_claude_cli
+   - 1회 재시도: 180초 → 300초
+
+3. [YouTube Gemini 폴백] analyzer.py analyze_youtube
+   - Gemini 실패 시 Claude CLI로 자동 폴백
+
+4. [스크래퍼 403 재시도] scraper.py fetch_page_content
+   - 403 시 User-Agent 변경 후 1회 재시도
+
+[파트 2: 보안 패치]
+
+5. [사용자 화이트리스트] ALLOWED_USER_IDS 환경변수
+   - 쉼표 구분 텔레그램 ID, 비어있으면 전체 허용
+
+6. [프롬프트 인젝션 방어] XML 태그 격리
+   - 모든 사용자 입력을 <user_input> 태그로 감싸서 분리
+
+7. [에러 메시지 정보 차단] 내부 정보 사용자 노출 방지
+   - 에러 메시지에서 상세 정보 제거, 로그에만 기록
+
+8. [SSRF 방어] 내부 IP 차단
+   - DNS 해석 후 private/loopback/link-local IP 차단
+
+9. [파일 크기 제한] DoS 방지
+   - MAX_FILE_SIZE 기본 10MB, 초과 시 업로드 거부
+
+10. [로그 URL 마스킹] 쿼리스트링 제거
+    - URL 로깅 시 ?이후 마스킹
+
+11. [터미널 팝업 방지] Windows 콘솔 창 억제
+    - Claude CLI subprocess에 CREATE_NO_WINDOW 플래그
+
+========================================
+ Files Changed
+========================================
+Modified: bot.py, analyzer.py, scraper.py, config.py, .env.example

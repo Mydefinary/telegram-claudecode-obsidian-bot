@@ -56,7 +56,12 @@ OBSIDIAN_FOLDER = os.getenv("OBSIDIAN_FOLDER", "텔레그램")
 
 # Processing
 MAX_CONCURRENT = int(os.getenv("MAX_CONCURRENT", "3"))
+MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", str(10 * 1024 * 1024)))  # 10MB default
 LANGUAGE = os.getenv("LANGUAGE", "ko")  # ko, en
+
+# Security: 허용된 텔레그램 사용자 ID (쉼표 구분, 비어있으면 모든 사용자 허용)
+_allowed_ids_raw = os.getenv("ALLOWED_USER_IDS", "")
+ALLOWED_USER_IDS: set[int] = {int(x.strip()) for x in _allowed_ids_raw.split(",") if x.strip()}
 
 # Message merge (연속 메시지 자동 병합)
 MESSAGE_MERGE_ENABLED = os.getenv("MESSAGE_MERGE_ENABLED", "true").lower() == "true"

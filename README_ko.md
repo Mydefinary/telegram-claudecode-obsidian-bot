@@ -24,6 +24,8 @@
 - **팁 풀 + 태그 매칭** -- 저장된 팁을 `/apply-tips`로 프로젝트에 태그 기반 매칭 적용
 - **다국어 지원** -- 한국어/영어 출력 언어 선택 가능
 - **다중 분석 엔진** -- Claude Code CLI, Anthropic API, OpenAI API 중 선택
+- **접근 제어** -- 텔레그램 사용자 ID 화이트리스트로 봇 사용 제한
+- **보안 강화** -- SSRF 방어, 프롬프트 인젝션 방어, 에러 정보 차단, 로그 마스킹
 
 ## 아키텍처
 
@@ -127,6 +129,8 @@ cp .env.example .env
 | `CLAUDE_CMD` | No | 자동 감지 | Claude CLI 실행 경로 |
 | `MESSAGE_MERGE_ENABLED` | No | `true` | 연속 메시지 자동 병합 |
 | `MESSAGE_MERGE_WAIT` | No | `5` | 병합 대기 시간 (초) |
+| `ALLOWED_USER_IDS` | No | (비어있으면 전체 허용) | 봇 사용이 허용된 텔레그램 사용자 ID (쉼표 구분) |
+| `MAX_FILE_SIZE` | No | `10485760` | 파일 업로드 최대 크기 (바이트, 기본 10MB) |
 
 ### 4. 실행
 

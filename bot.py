@@ -18,7 +18,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import Conflict, NetworkError, TimedOut, RetryAfter
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT  # noqa: E402
+from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MAX_FILE_SIZE, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT, ALLOWED_USER_IDS  # noqa: E402
 from scraper import extract_urls, fetch_page_content, is_github_repo_url
 from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, analyze_youtube, analyze_github, check_duplicate_content, is_youtube_url
 from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
@@ -26,6 +26,21 @@ from kakao_parser import is_kakao_format, parse_kakao_txt
 from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval
 
 logger = logging.getLogger(__name__)
+
+
+def _is_user_allowed(update: Update) -> bool:
+    """허용된 사용자인지 확인한다. ALLOWED_USER_IDS가 비어있으면 모든 사용자 허용."""
+    if not ALLOWED_USER_IDS:
+        return True
+    user = update.effective_user
+    return user is not None and user.id in ALLOWED_USER_IDS
+
+
+def _mask_url(url: str) -> str:
+    """로그용 URL 마스킹 — 쿼리스트링에 민감 정보가 포함될 수 있으므로 제거."""
+    if "?" in url:
+        return url.split("?")[0] + "?[masked]"
+    return url
 
 
 def split_my_thoughts(text: str) -> tuple[str, str]:
@@ -107,6 +122,8 @@ async def _show_tip_prompt(message, ev, title):
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_user_allowed(update):
+        return
     await update.message.reply_text(
         "링크, 메시지, 이미지를 보내주세요.\n"
         "분석 후 옵시디언에 자동 저장합니다.\n\n"
@@ -114,12 +131,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- URL -> 사이트 분석\n"
         "- 텍스트 -> 내용 정리\n"
         "- 이미지 -> 이미지 분석\n"
-        "- .txt 파일 -> 줄 단위 병렬 처리\n\n"
-        "/start - 시작 | /help - 도움말"
+        "- .txt 파일 -> 줄 단위 병렬 처���\n\n"
+        "/start - 시작 | /help - 도움��"
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _is_user_allowed(update):
+        return
     merge_state = "ON" if merge_enabled else "OFF"
     await update.message.reply_text(
         "사용법:\n"
@@ -164,11 +183,11 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                 return
 
             try:
-                logger.info(f"URL 처리 시작: {url}")
+                logger.info(f"URL 처리 시작: {_mask_url(url)}")
 
                 # YouTube는 Gemini, GitHub는 API+README로 분석
                 if is_youtube_url(url):
-                    logger.info(f"YouTube 감지, Gemini 분석: {url}")
+                    logger.info(f"YouTube 감지, Gemini 분석: {_mask_url(url)}")
                     result = await analyze_youtube(url)
                     page = {"title": "", "content": "", "error": ""}
                     scraped_ok = False
@@ -182,17 +201,17 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     scraped_ok = not page["error"] and len(page.get("content", "").strip()) > 100
 
                     if page["error"]:
-                        logger.warning(f"스크래핑 오류 (fallback 분석): {url} - {page['error']}")
+                        logger.warning(f"스크래핑 오류 (fallback 분석): {_mask_url(url)}")
 
                     if scraped_ok:
                         result = await analyze_link(url, page["title"], page["content"])
                     else:
-                        logger.info(f"스크래핑 부족, Claude 직접 분석: {url}")
+                        logger.info(f"스크래핑 부족, Claude 직접 분석: {_mask_url(url)}")
                         result = await analyze_link_direct(url)
 
                 # 분석 실패 시 저장하지 않고 실패 목록에 추가
                 if result["failed"]:
-                    logger.warning(f"분석 실패: {url}")
+                    logger.warning(f"분석 실패: {_mask_url(url)}")
                     async with failed_urls_lock:
                         desc = non_url_text or page.get("title", "")
                         failed_urls.append(f"{url} ({desc})" if desc else url)
@@ -239,11 +258,11 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     # Claude Code 팁이 있으면 처리 유형 선택
                     await _show_tip_prompt(update.message, ev, title)
                 except Exception as ev_err:
-                    logger.error(f"평가 오류: {url} - {ev_err}", exc_info=True)
+                    logger.error(f"평가 오류: {_mask_url(url)} - {ev_err}", exc_info=True)
                     await update.message.reply_text(f"[완료] {title}")
 
             except Exception as e:
-                logger.error(f"URL 처리 실패: {url} - {e}", exc_info=True)
+                logger.error(f"URL 처리 실패: {_mask_url(url)} - {e}", exc_info=True)
                 async with failed_urls_lock:
                     failed_urls.append(f"{url} (오류: {e})")
         else:
@@ -403,7 +422,7 @@ async def _process_combined_message(text: str, urls: list[str], update: Update):
                 originals.append(f"[{title}]\n{page_content}")
 
         except Exception as e:
-            logger.error(f"통합 분석 중 URL 실패: {url} - {e}", exc_info=True)
+            logger.error(f"통합 분석 중 URL 실패: {_mask_url(url)} - {e}", exc_info=True)
             failed.append(url)
 
     if not sections:
@@ -498,6 +517,8 @@ async def toggle_merge(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """텍스트 메시지를 받아 분석하고 옵시디언에 저장한다."""
+    if not _is_user_allowed(update):
+        return
     text = update.message.text
     if not text or len(text.strip()) < 5:
         return
@@ -508,7 +529,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _process_text_message(text, update)
         except Exception as e:
             logger.error(f"메시지 처리 실패: {text[:80]}... - {e}", exc_info=True)
-            await update.message.reply_text(f"[오류] 처리 실패: {e}")
+            await update.message.reply_text("[오류] 메시지 처리에 실패했습니다. 다시 시도해주세요.")
         return
 
     # 병합 모드: 버퍼에 추가하고 타이머 리셋
@@ -533,6 +554,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """txt 파일을 받아 줄 단위로 파싱 후 큐 처리한다."""
+    if not _is_user_allowed(update):
+        return
     doc = update.message.document
     if not doc:
         return
@@ -541,6 +564,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     file_name = doc.file_name or ""
     if not file_name.lower().endswith(".txt"):
         await update.message.reply_text("txt 파일만 지원합니다.")
+        return
+
+    # 파일 크기 제한
+    if doc.file_size and doc.file_size > MAX_FILE_SIZE:
+        max_mb = MAX_FILE_SIZE // (1024 * 1024)
+        await update.message.reply_text(f"파일 크기 초과 (최대 {max_mb}MB)")
         return
 
     await update.message.reply_text(f"파일 수신: {file_name}\n다운로드 중...")
@@ -583,11 +612,13 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"문서 처리 실패: {file_name} - {e}", exc_info=True)
-        await update.message.reply_text(f"파일 처리 오류: {e}")
+        await update.message.reply_text("[오류] 파일 처리에 실패했습니다. 다시 시도해주세요.")
 
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """이미지를 받아 Claude로 분석하고 옵시디언에 저장한다."""
+    if not _is_user_allowed(update):
+        return
     # 가장 큰 해상도의 사진 선택
     photo = update.message.photo[-1]
     caption = update.message.caption or ""
@@ -631,7 +662,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logger.error(f"이미지 처리 실패: {e}", exc_info=True)
-        await update.message.reply_text(f"[오류] 이미지 분석 실패\n{e}")
+        await update.message.reply_text("[오류] 이미지 분석에 실패했습니다. 다시 시도해주세요.")
 
 
 async def handle_tip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):

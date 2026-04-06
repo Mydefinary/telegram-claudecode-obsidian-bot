@@ -35,6 +35,8 @@ TODO: Add screenshots
 - **Tip Pool + Tag Matching** -- Saved tips can be applied to projects via `/apply-tips` with tag-based matching
 - **Multi-language Output** -- Supports Korean and English output
 - **Multiple AI Engines** -- Choose between Claude Code CLI, Anthropic API, or OpenAI API
+- **Access Control** -- Restrict bot usage to whitelisted Telegram user IDs
+- **Security Hardening** -- SSRF protection, prompt injection defense, error sanitization, log masking
 
 ## Architecture
 
@@ -136,6 +138,8 @@ docker compose up -d
 | `CLAUDE_CMD` | No | Auto-detected | Path to Claude CLI executable |
 | `MESSAGE_MERGE_ENABLED` | No | `true` | Auto-merge consecutive messages |
 | `MESSAGE_MERGE_WAIT` | No | `5` | Seconds to wait before merging |
+| `ALLOWED_USER_IDS` | No | (empty = all) | Comma-separated Telegram user IDs allowed to use the bot |
+| `MAX_FILE_SIZE` | No | `10485760` | Maximum file upload size in bytes (default 10MB) |
 
 ## Usage
 

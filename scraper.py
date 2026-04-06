@@ -1,6 +1,9 @@
 import re
+import socket
+import ipaddress
 import logging
 import httpx
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 from config import GITHUB_TOKEN
 
@@ -17,6 +20,25 @@ def _clean_url(url: str) -> str:
     return _URL_TRAIL_JUNK.sub('', url)
 
 
+def _is_safe_url(url: str) -> bool:
+    """내부 IP/loopback 주소 접근을 차단한다 (SSRF 방어)."""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        # DNS 해석 후 IP 주소 확인
+        resolved = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _, _, _, sockaddr in resolved:
+            ip = ipaddress.ip_address(sockaddr[0])
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+                return False
+        return True
+    except (socket.gaierror, ValueError):
+        # DNS 해석 실패는 허용 (fetch에서 에러 처리됨)
+        return True
+
+
 def extract_urls(text: str) -> list[str]:
     raw = URL_PATTERN.findall(text)
     return [_clean_url(u) for u in raw]
@@ -30,6 +52,10 @@ _USER_AGENTS = [
 
 async def fetch_page_content(url: str) -> dict:
     """URL에서 페이지 제목과 본문 텍스트를 추출한다. 403 시 다른 User-Agent로 1회 재시도."""
+    if not _is_safe_url(url):
+        logger.warning(f"SSRF 차단: 내부 IP 접근 시도 - {url}")
+        return {"url": url, "title": "", "content": "", "error": "blocked: internal address"}
+
     for attempt, ua in enumerate(_USER_AGENTS):
         headers = {"User-Agent": ua, "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8"}
         try:
