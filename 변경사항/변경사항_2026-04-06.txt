@@ -99,3 +99,50 @@
  Files Changed
 ========================================
 Modified: bot.py, analyzer.py, scraper.py, config.py, .env.example
+
+========================================
+ Part 3: New Features
+========================================
+
+12. [Auto-Link Related Notes] Post-save vault linking
+    - obsidian_writer.py: extract_keywords_from_content(), find_related_notes(), add_related_links()
+    - Local matching: title word overlap + keyword tag overlap + SequenceMatcher ratio
+    - Bi-directional links: new note links to related + related notes link back
+    - No AI calls — pure text matching
+
+13. [/cleanup Command] Vault management via Telegram
+    - vault_manager.py: New module
+    - /cleanup scan — Find duplicate pairs (title similarity > 0.6)
+    - /cleanup merge — AI-confirmed dedup + merge (uses check_duplicate_content)
+    - /cleanup tidy — Find low-quality notes (body < 50 chars or grade D ≤ 8pts)
+    - /cleanup execute — Archive candidates to _archive/ folder
+    - Safe deletion: moves to _archive/ instead of deleting
+
+14. [Content Reflection] Save full content to AI knowledge
+    - evaluator.py: save_content_to_pool(), summarize_content_for_knowledge(), append_content_to_claude_md()
+    - A/B grade notes get "내용 반영 (Pool)" and "내용 반영 (Global)" buttons
+    - Pool: saves to ~/.claude/tips/ with type: content (2000 char limit)
+    - Global: summarizes to CLAUDE.md ## 지식 반영 section
+    - Tip-less high-quality notes also get content reflect prompt
+
+========================================
+ 파트 3: 신규 기능
+========================================
+
+12. [관련 노트 자동 링크] 저장 후 볼트 연결
+    - 키워드+제목 로컬 매칭, 양방향 [[링크]] 자동 추가
+    - AI 호출 없음
+
+13. [/cleanup 명령] 텔레그램에서 볼트 관리
+    - scan/merge/tidy/execute 4개 서브커맨드
+    - 안전한 삭제 (_archive/ 이동)
+
+14. [내용 반영] 고품질 노트 내용을 AI 지식에 직접 반영
+    - A/B 등급 노트에 내용 반영 버튼 추가
+    - Pool/Global 두 가지 옵션
+
+========================================
+ Additional Files Changed
+========================================
+New:     vault_manager.py
+Modified: bot.py, obsidian_writer.py, evaluator.py, prompts/ko.py, prompts/en.py, prompts/__init__.py
