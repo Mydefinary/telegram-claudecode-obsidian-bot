@@ -256,3 +256,125 @@ def update_note_with_eval(filepath: str, eval_text: str):
             f.write(eval_text)
     except Exception as e:
         logger.error(f"평가 결과 저장 실패: {filepath} - {e}", exc_info=True)
+
+
+def save_content_to_pool(title: str, content: str, source_url: str = "", tags: list[str] = None) -> str | bool:
+    """분석 내용 자체를 팁 풀에 type:content로 저장한다.
+    Returns: 저장된 파일 경로 또는 False (중복)
+    """
+    from datetime import datetime
+
+    os.makedirs(TIPS_DIR, exist_ok=True)
+
+    # 중복 체크: 동일 title의 content 파일이 이미 있는지
+    for f in os.listdir(TIPS_DIR):
+        if not f.endswith("_content.md"):
+            continue
+        try:
+            with open(os.path.join(TIPS_DIR, f), "r", encoding="utf-8") as fp:
+                existing = fp.read()
+            if f'source: "{title}"' in existing:
+                return False
+        except Exception as e:
+            logger.warning(f"내용 풀 중복 체크 실패: {f} - {e}")
+
+    # 내용 2000자 제한
+    truncated = content[:2000] + "\n...(truncated)" if len(content) > 2000 else content
+
+    # 파일명 생성
+    today = datetime.now().strftime("%Y%m%d")
+    seq = 1
+    while os.path.exists(os.path.join(TIPS_DIR, f"{today}_{seq:02d}_content.md")):
+        seq += 1
+    filename = f"{today}_{seq:02d}_content.md"
+    filepath = os.path.join(TIPS_DIR, filename)
+
+    # 태그 포맷
+    tags_str = ", ".join(tags) if tags else ""
+
+    file_content = (
+        f"---\n"
+        f'source: "{title}"\n'
+        f'date: "{datetime.now().strftime("%Y-%m-%d")}"\n'
+        f'type: "content"\n'
+        f"tags: [{tags_str}]\n"
+        f'url: "{source_url}"\n'
+        f"applied: []\n"
+        f"declined: []\n"
+        f"---\n\n"
+        f"## 핵심 내용\n"
+        f"{truncated}\n"
+    )
+    if source_url:
+        file_content += f"\n## 출처\n{source_url}\n"
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(file_content)
+        logger.info(f"내용 풀 저장: {filename} ({len(truncated)}자)")
+        return filepath
+    except Exception as e:
+        logger.error(f"내용 풀 저장 실패: {filename} - {e}")
+        return False
+
+
+async def summarize_content_for_knowledge(title: str, content: str) -> str:
+    """내용이 2000자 초과면 AI로 요약, 이하면 그대로 반환."""
+    if len(content) <= 2000:
+        return content
+
+    from analyzer import _run_claude
+
+    prompt = (
+        "아래 분석 내용을 핵심만 추려 1500자 이내로 요약해줘. "
+        "구체적인 수치, 도구명, 코드 패턴은 보존하고, 반복이나 부연은 제거해.\n\n"
+        f"<content>\n{content[:4000]}\n</content>"
+    )
+    try:
+        result = await _run_claude(prompt, allowed_tools="")
+        return result[:2000]
+    except Exception as e:
+        logger.error(f"내용 요약 실패: {title} - {e}")
+        return content[:2000] + "\n...(truncated)"
+
+
+def append_content_to_claude_md(title: str, summary: str, source_url: str = "") -> bool:
+    """분석 내용을 글로벌 CLAUDE.md의 '지식 반영' 섹션에 추가한다."""
+    try:
+        with open(CLAUDE_MD_PATH, "r", encoding="utf-8") as f:
+            existing = f.read()
+    except FileNotFoundError:
+        existing = ""
+
+    # 중복 체크
+    if title in existing:
+        return False
+
+    # 요약을 5줄 이내로 축약
+    lines = [l for l in summary.strip().split("\n") if l.strip()]
+    short_summary = "\n".join(lines[:5])
+    if len(lines) > 5:
+        short_summary += "\n  ..."
+
+    # 지식 반영 섹션 구성
+    entry = f"- **{title}**: {short_summary}"
+    if source_url:
+        entry += f"\n  > 출처: {source_url}"
+
+    section_header = "## 지식 반영 (자동 수집)"
+
+    if section_header in existing:
+        # 기존 섹션에 추가
+        existing = existing.replace(section_header, f"{section_header}\n{entry}", 1)
+    else:
+        # 새 섹션 추가 (파일 끝)
+        existing = existing.rstrip() + f"\n\n{section_header}\n{entry}\n"
+
+    try:
+        with open(CLAUDE_MD_PATH, "w", encoding="utf-8") as f:
+            f.write(existing)
+        logger.info(f"CLAUDE.md 지식 반영: {title}")
+        return True
+    except Exception as e:
+        logger.error(f"CLAUDE.md 지식 반영 실패: {title} - {e}")
+        return False

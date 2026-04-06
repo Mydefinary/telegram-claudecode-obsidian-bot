@@ -198,3 +198,130 @@ def copy_image_to_vault(image_path: str) -> str:
         logger.error(f"이미지 복사 실패: {image_path} - {e}", exc_info=True)
         raise
     return dest_path
+
+
+def extract_keywords_from_content(content: str) -> list[str]:
+    """콘텐츠에서 키워드를 추출한다. ### 키워드 섹션의 #태그 파싱."""
+    # "### 키워드" 또는 "### Keywords" 섹션 찾기
+    match = re.search(r'###\s*(?:키워드|Keywords)\s*\n(.*?)(?:\n###|\n---|\Z)', content, re.DOTALL)
+    if not match:
+        return []
+    section = match.group(1)
+    # #태그 형식 파싱 (예: #AI, #개발, #claude-code)
+    tags = re.findall(r'#([\w가-힣-]+)', section)
+    return [t.lower() for t in tags if len(t) > 1]
+
+
+def find_related_notes(title: str, content: str, exclude_filename: str = "") -> list[dict]:
+    """기존 노트와 제목+키워드 로컬 매칭으로 관련 노트를 찾는다. AI 호출 없음.
+    Returns: [{"filename": str, "title": str, "score": int}] (상위 5개)
+    """
+    from difflib import SequenceMatcher
+
+    existing = get_existing_notes_summary()
+    new_keywords = set(extract_keywords_from_content(content))
+    new_title_words = set(w.lower() for w in re.split(r'\s+', title) if len(w) > 1)
+
+    scored = []
+    for note in existing:
+        if note["filename"] == exclude_filename:
+            continue
+
+        score = 0
+
+        # 제목 단어 겹침
+        note_title_words = set(w.lower() for w in re.split(r'\s+', note["title"]) if len(w) > 1)
+        title_overlap = len(new_title_words & note_title_words)
+        score += title_overlap * 2
+
+        # 키워드 겹침
+        note_keywords = set(extract_keywords_from_content(note.get("preview", "")))
+        keyword_overlap = len(new_keywords & note_keywords)
+        score += keyword_overlap * 3
+
+        # 제목 유사도 (SequenceMatcher)
+        ratio = SequenceMatcher(None, title.lower(), note["title"].lower()).ratio()
+        if ratio > 0.4:
+            score += int(ratio * 5)
+
+        if score >= 2:
+            scored.append({"filename": note["filename"], "title": note["title"], "score": score})
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    return scored[:5]
+
+
+def add_related_links(filepath: str, related_notes: list[dict]):
+    """노트에 ## 관련 노트 섹션을 추가한다. 이미 있으면 스킵."""
+    if not related_notes:
+        return
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+    except Exception as e:
+        logger.warning(f"관련 노트 링크 추가 실패 (읽기): {filepath} - {e}")
+        return
+
+    # 이미 관련 노트 섹션이 있으면 스킵
+    if "## 관련 노트" in content:
+        return
+
+    # 링크 섹션 구성
+    links = "\n".join(f"- [[{n['title']}]]" for n in related_notes)
+    section = f"\n\n## 관련 노트\n{links}\n"
+
+    # 삽입 위치: ## 평가 앞, 없으면 원본 보기 앞, 없으면 파일 끝
+    if "## 평가" in content:
+        content = content.replace("## 평가", f"{section}\n## 평가", 1)
+    elif "> [!quote]- 원본 보기" in content:
+        content = content.replace("> [!quote]- 원본 보기", f"{section}\n> [!quote]- 원본 보기", 1)
+    else:
+        content += section
+
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info(f"관련 노트 {len(related_notes)}개 링크 추가: {os.path.basename(filepath)}")
+    except Exception as e:
+        logger.warning(f"관련 노트 링크 추가 실패 (쓰기): {filepath} - {e}")
+
+    # 역방향 링크 추가 (관련 노트 각각에 새 노트 링크 추가)
+    new_note_title = ""
+    title_match = re.search(r'^# (.+)$', content, re.MULTILINE)
+    if title_match:
+        new_note_title = title_match.group(1).strip()
+
+    if not new_note_title:
+        return
+
+    folder_path = os.path.join(OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER)
+    for note in related_notes:
+        note_path = os.path.join(folder_path, note["filename"])
+        if not os.path.exists(note_path):
+            continue
+        try:
+            with open(note_path, "r", encoding="utf-8") as f:
+                note_content = f.read()
+
+            # 이미 이 노트에 대한 링크가 있으면 스킵
+            if f"[[{new_note_title}]]" in note_content:
+                continue
+
+            # 관련 노트 섹션이 있으면 거기에 추가, 없으면 새로 생성
+            new_link = f"- [[{new_note_title}]]"
+            if "## 관련 노트" in note_content:
+                # 기존 섹션의 마지막 줄 뒤에 추가
+                note_content = note_content.replace("## 관련 노트\n", f"## 관련 노트\n{new_link}\n", 1)
+            else:
+                # 새 섹션 추가 (평가 앞)
+                back_section = f"\n\n## 관련 노트\n{new_link}\n"
+                if "## 평가" in note_content:
+                    note_content = note_content.replace("## 평가", f"{back_section}\n## 평가", 1)
+                else:
+                    note_content += back_section
+
+            with open(note_path, "w", encoding="utf-8") as f:
+                f.write(note_content)
+        except Exception as e:
+            logger.warning(f"역방향 링크 추가 실패: {note['filename']} - {e}")

@@ -15,6 +15,7 @@ def get_prompts() -> dict:
         "github_analysis": mod.GITHUB_ANALYSIS_PROMPT,
         "dedup": mod.DEDUP_PROMPT,
         "eval": mod.EVAL_PROMPT,
+        "content_summary": mod.CONTENT_SUMMARY_PROMPT,
         "fail_patterns": mod.FAIL_PATTERNS,
         "meta_patterns": mod.META_PATTERNS,
     }

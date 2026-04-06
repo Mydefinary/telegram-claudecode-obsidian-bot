@@ -193,6 +193,12 @@ FAIL_PATTERNS = [
     "provide the content",
 ]
 
+CONTENT_SUMMARY_PROMPT = (
+    "Summarize the analysis below to under 1500 characters, keeping the essentials.\n"
+    "Preserve specific numbers, tool names, code patterns, config examples.\n"
+    "Remove repetition and filler. Keep markdown format but exclude the title line (# ...)."
+)
+
 META_PATTERNS = [
     r"I now have enough information\.?\s*Let me write the analysis\.?",
     r"I'll write the analysis\.?",

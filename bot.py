@@ -21,9 +21,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQu
 from config import TELEGRAM_BOT_TOKEN, OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER, MAX_CONCURRENT, MAX_FILE_SIZE, MESSAGE_MERGE_ENABLED, MESSAGE_MERGE_WAIT, ALLOWED_USER_IDS  # noqa: E402
 from scraper import extract_urls, fetch_page_content, is_github_repo_url
 from analyzer import analyze_link, analyze_link_direct, analyze_text, analyze_image, analyze_youtube, analyze_github, check_duplicate_content, is_youtube_url
-from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note
+from obsidian_writer import save_note, copy_image_to_vault, is_url_duplicate, get_existing_notes_summary, append_to_existing_note, find_related_notes, add_related_links
 from kakao_parser import is_kakao_format, parse_kakao_txt
-from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval
+from evaluator import evaluate_note, format_eval_tags, append_to_claude_md, create_skill, save_tip_to_pool, update_note_with_eval, save_content_to_pool, summarize_content_for_knowledge, append_content_to_claude_md
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ def split_my_thoughts(text: str) -> tuple[str, str]:
 pending_tips = {}
 
 
-async def _show_tip_prompt(message, ev, title):
+async def _show_tip_prompt(message, ev, title, content="", url=""):
     """팁 발견 시 처리 유형 선택 버튼을 보여준다."""
     tip = ev.get("tip", "")
     if not tip or tip == "없음":
@@ -75,6 +75,9 @@ async def _show_tip_prompt(message, ev, title):
             "tip_action_reason": ev.get("tip_action_reason", ""),
             "skill_name": ev.get("skill_name", ""),
             "tags": ev.get("tags", []),
+            "grade": ev.get("grade", "D"),
+            "note_content": content[:2000] if content else "",
+            "note_url": url,
         }
 
         tip_desc = ev.get("tip_desc", "")
@@ -105,7 +108,7 @@ async def _show_tip_prompt(message, ev, title):
 
         msg_parts.append("\n어떻게 처리할까요?")
 
-        keyboard = InlineKeyboardMarkup([
+        buttons = [
             [
                 InlineKeyboardButton("Global 반영", callback_data=f"tip_global:{tip_id}"),
                 InlineKeyboardButton("Skill 제작", callback_data=f"tip_skill:{tip_id}"),
@@ -114,11 +117,48 @@ async def _show_tip_prompt(message, ev, title):
                 InlineKeyboardButton("팁 저장", callback_data=f"tip_pool:{tip_id}"),
                 InlineKeyboardButton("스킵", callback_data=f"tip_skip:{tip_id}"),
             ],
-        ])
+        ]
+        # A/B 등급 고품질 노트에는 내용 반영 옵션 추가
+        if ev.get("grade", "D") in ("A", "B") and content:
+            buttons.append([
+                InlineKeyboardButton("내용 반영 (Pool)", callback_data=f"tip_content_pool:{tip_id}"),
+                InlineKeyboardButton("내용 반영 (Global)", callback_data=f"tip_content_global:{tip_id}"),
+            ])
+        keyboard = InlineKeyboardMarkup(buttons)
 
         await message.reply_text("\n".join(msg_parts), reply_markup=keyboard)
     except Exception as e:
         logger.error(f"팁 프롬프트 전송 실패: {title} - {e}", exc_info=True)
+
+
+async def _show_content_reflect_prompt(message, ev, title, content, url=""):
+    """팁은 없지만 고품질(A/B) 노트에 대해 내용 반영 옵션을 제안한다."""
+    if ev.get("grade", "D") not in ("A", "B") or not content:
+        return
+    try:
+        import uuid
+        tip_id = str(uuid.uuid4())[:8]
+        pending_tips[tip_id] = {
+            "tip": "",
+            "title": title,
+            "tags": ev.get("tags", []),
+            "grade": ev.get("grade", "D"),
+            "note_content": content[:2000],
+            "note_url": url,
+        }
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("내용 반영 (Pool)", callback_data=f"tip_content_pool:{tip_id}"),
+                InlineKeyboardButton("내용 반영 (Global)", callback_data=f"tip_content_global:{tip_id}"),
+            ],
+            [InlineKeyboardButton("스킵", callback_data=f"tip_skip:{tip_id}")],
+        ])
+        await message.reply_text(
+            f"[고품질 노트] 등급 {ev['grade']} — 내용을 AI 지식에 반영할까요?",
+            reply_markup=keyboard,
+        )
+    except Exception as e:
+        logger.error(f"내용 반영 프롬프트 전송 실패: {title} - {e}", exc_info=True)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -244,9 +284,17 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                         await update.message.reply_text(f"[보강] {dedup['similar_file']}에 새 정보 추가")
                         return
 
-                # 신규 저장 (원본 포함 — 스크래핑 부분 성공도 저장)
+                # 신규 저장 (원본 포함 — 스크래��� 부분 성공도 저장)
                 original = page.get("content", "")
                 filepath = save_note(title=title, content=content, source_url=url, source_type="link", original_content=original, my_thoughts=my_thoughts)
+
+                # 관련 노트 링크 자동 추가
+                try:
+                    related = find_related_notes(title, content, exclude_filename=os.path.basename(filepath))
+                    if related:
+                        add_related_links(filepath, related)
+                except Exception as link_err:
+                    logger.warning(f"관련 노�� 링크 실패: {link_err}")
 
                 # 평가
                 try:
@@ -256,7 +304,11 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     await update.message.reply_text(eval_msg)
 
                     # Claude Code 팁이 있으면 처리 유형 선택
-                    await _show_tip_prompt(update.message, ev, title)
+                    await _show_tip_prompt(update.message, ev, title, content=content, url=url)
+                    # 팁 없는 고품질 노트에 내용 반영 제안
+                    tip = ev.get("tip", "")
+                    if (not tip or tip == "없음") and ev.get("grade", "D") in ("A", "B"):
+                        await _show_content_reflect_prompt(update.message, ev, title, content, url)
                 except Exception as ev_err:
                     logger.error(f"평가 오류: {_mask_url(url)} - {ev_err}", exc_info=True)
                     await update.message.reply_text(f"[완료] {title}")
@@ -298,6 +350,14 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
 
                 filepath = save_note(title=result["title"], content=result["content"], source_url="", source_type="text", original_content=item, my_thoughts=my_thoughts)
 
+                # 관련 노트 링크 자동 추가
+                try:
+                    related = find_related_notes(result["title"], result["content"], exclude_filename=os.path.basename(filepath))
+                    if related:
+                        add_related_links(filepath, related)
+                except Exception as link_err:
+                    logger.warning(f"관련 노트 링크 실패: {link_err}")
+
                 # 평가
                 try:
                     ev = await evaluate_note(result["title"], result["content"])
@@ -306,7 +366,11 @@ async def process_single_item(item: str, update: Update, semaphore: asyncio.Sema
                     await update.message.reply_text(eval_msg)
 
                     # Claude Code 팁이 있으면 처리 유형 선택
-                    await _show_tip_prompt(update.message, ev, result["title"])
+                    await _show_tip_prompt(update.message, ev, result["title"], content=result["content"])
+                    # 팁 없는 고품질 노트에 내용 반영 제안
+                    tip = ev.get("tip", "")
+                    if (not tip or tip == "없음") and ev.get("grade", "D") in ("A", "B"):
+                        await _show_content_reflect_prompt(update.message, ev, result["title"], result["content"])
                 except Exception as ev_err:
                     logger.error(f"텍스트 평가 오류: {ev_err}", exc_info=True)
                     await update.message.reply_text(f"[완료] {result['title']}")
@@ -716,8 +780,31 @@ async def handle_tip_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             await query.edit_message_text("[스킵] 이미 동일한 팁이 풀에 존재합니다")
 
+    elif action == "tip_content_pool":
+        result = save_content_to_pool(
+            title=tip_data["title"],
+            content=tip_data.get("note_content", ""),
+            source_url=tip_data.get("note_url", ""),
+            tags=tip_data.get("tags", []),
+        )
+        if result:
+            await query.edit_message_text(f"[내용 반영] 팁 풀에 저장됨\n>> {tip_data['title']}")
+        else:
+            await query.edit_message_text("[스킵] 이미 동일한 내용이 존재합니다")
+
+    elif action == "tip_content_global":
+        summary = await summarize_content_for_knowledge(
+            tip_data["title"],
+            tip_data.get("note_content", ""),
+        )
+        if append_content_to_claude_md(tip_data["title"], summary, tip_data.get("note_url", "")):
+            await query.edit_message_text(f"[Global 내용 반영] CLAUDE.md에 추가됨\n>> {tip_data['title']}")
+        else:
+            await query.edit_message_text("[스킵] 이미 동일한 내용이 존재합니다")
+
     else:  # tip_skip
-        await query.edit_message_text(f"[스킵] 팁 미적용: {tip_data['tip']}")
+        tip_text = tip_data.get('tip', '') or tip_data.get('title', '')
+        await query.edit_message_text(f"[스킵] 미적용: {tip_text}")
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
@@ -755,6 +842,62 @@ async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
+async def handle_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/cleanup 명령: 볼트 중복 스캔/통합/정리."""
+    if not _is_user_allowed(update):
+        return
+
+    from vault_manager import scan_vault_duplicates, scan_and_merge_duplicates, find_cleanup_candidates, cleanup_notes
+
+    args = context.args[0] if context.args else "scan"
+
+    if args == "scan":
+        await update.message.reply_text("볼트 중복 스캔 중...")
+        pairs = await scan_vault_duplicates()
+        if not pairs:
+            await update.message.reply_text("[스캔 완료] 중복 의심 노트 없음")
+            return
+        msg = f"[스캔 완료] {len(pairs)}개 유사 쌍 발견:\n"
+        for p in pairs[:10]:
+            msg += f"- {p['note_a']['filename']} ↔ {p['note_b']['filename']} ({p['similarity']})\n"
+        if len(pairs) > 10:
+            msg += f"...외 {len(pairs) - 10}개\n"
+        msg += "\n`/cleanup merge`로 AI 확인 후 통합\n`/cleanup tidy`로 저품질 노트 정리"
+        await update.message.reply_text(msg)
+
+    elif args == "merge":
+        await update.message.reply_text("AI 확인 후 중복 통합 중... (시간이 걸릴 수 있습니다)")
+        result = await scan_and_merge_duplicates()
+        msg = f"[통합 완료] {result['merged']}개 통합\n"
+        for d in result["details"][:10]:
+            msg += f"  {d}\n"
+        await update.message.reply_text(msg)
+
+    elif args == "tidy":
+        candidates = find_cleanup_candidates()
+        if not candidates:
+            await update.message.reply_text("[정리] 정리 대상 노트 없음")
+            return
+        msg = f"[정리 대상] {len(candidates)}개 노트:\n"
+        for c in candidates[:15]:
+            msg += f"- {c['filename']} ({c['reason']})\n"
+        await update.message.reply_text(msg + "\n정리를 실행하려면 `/cleanup execute`")
+
+    elif args == "execute":
+        candidates = find_cleanup_candidates()
+        result = cleanup_notes(candidates)
+        await update.message.reply_text(f"[정리 완료] {result['moved']}개 아카이브, {result['errors']}개 실패")
+
+    else:
+        await update.message.reply_text(
+            "/cleanup 사용법:\n"
+            "  scan — 중복 의심 노트 스캔\n"
+            "  merge — AI 확인 후 중복 통합\n"
+            "  tidy — 저품질 노트 정리 대상 확인\n"
+            "  execute — 저품질 ��트 아카이브 실���"
+        )
+
+
 def main():
     if not TELEGRAM_BOT_TOKEN:
         print("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다. .env 파일을 확인하세요.")
@@ -765,6 +908,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("merge", toggle_merge))
+    app.add_handler(CommandHandler("cleanup", handle_cleanup))
     app.add_handler(CallbackQueryHandler(handle_tip_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
