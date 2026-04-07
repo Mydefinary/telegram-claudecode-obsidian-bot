@@ -140,7 +140,7 @@ def merge_duplicate_notes(primary_path: str, secondary_path: str):
 
 
 def find_cleanup_candidates() -> list[dict]:
-    """불필요한 노트 후보를 찾는다.
+    """불필요한 노트 후보를 찾는다 (재귀 스캔).
     기준: 본문 50자 미만, 또는 등급 D + 총점 8점 이하
     Returns: [{"filepath": str, "filename": str, "reason": str}]
     """
@@ -148,13 +148,18 @@ def find_cleanup_candidates() -> list[dict]:
     if not os.path.exists(folder_path):
         return []
 
+    SKIP_DIRS = {"_archive", "attachments", ".obsidian", ".trash", "_templates"}
     candidates = []
 
-    for f in sorted(os.listdir(folder_path)):
-        if not f.endswith(".md"):
-            continue
+    md_files = []
+    for root, dirs, files in os.walk(folder_path):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        for f in files:
+            if f.endswith(".md"):
+                md_files.append((root, f))
 
-        filepath = os.path.join(folder_path, f)
+    for root, f in sorted(md_files, key=lambda x: x[1]):
+        filepath = os.path.join(root, f)
         content = _read_note_content(filepath)
         if not content:
             continue

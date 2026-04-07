@@ -217,19 +217,60 @@ async def _run_claude(prompt: str, allowed_tools: str | None = "WebFetch,WebSear
 
 # ── Dedup ──
 
+def _shortlist_candidates(new_title: str, new_content: str, existing_notes: list[dict], top_n: int = 15) -> list[dict]:
+    """LLM에 보내기 전에 제목/키워드 유사도로 후보를 좁힌다.
+
+    벡터 임베딩을 쓰지 않고도 빠르게 노이즈를 걸러내는 휴리스틱:
+    - 제목 SequenceMatcher 비율
+    - 새 내용의 1차 토큰들과 노트 미리보기의 토큰 교집합
+    두 점수의 가중합 상위 N개만 반환.
+    """
+    from difflib import SequenceMatcher
+    import re as _re
+
+    def _tokenise(s: str) -> set[str]:
+        # 한글/영문 단어 단위
+        return {t for t in _re.findall(r"[\w가-힣]{2,}", s.lower()) if len(t) >= 2}
+
+    new_title_lc = new_title.lower()
+    new_tokens = _tokenise(new_title + " " + new_content[:500])
+    if not new_tokens:
+        return existing_notes[:top_n]
+
+    scored = []
+    for n in existing_notes:
+        title_sim = SequenceMatcher(None, new_title_lc, n["title"].lower()).ratio()
+        n_tokens = _tokenise(n["title"] + " " + n.get("preview", ""))
+        overlap = len(new_tokens & n_tokens) / max(len(new_tokens), 1)
+        score = title_sim * 0.6 + overlap * 0.4
+        if score > 0.1:  # 명백히 무관한 것 제외
+            scored.append((score, n))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [n for _, n in scored[:top_n]]
+
+
 async def check_duplicate_content(new_title: str, new_content: str, existing_notes: list[dict]) -> dict:
     """Check if new content duplicates existing notes.
     Returns: {"action": "new"/"skip"/"merge", "similar_file": str, "new_info": str}
+
+    Two-stage filter:
+    1. Local heuristic shortlists top 15 candidates from all existing notes
+       (handles 200+ note vault without overflowing the LLM context).
+    2. LLM verdict on the shortlist only.
     """
     if not existing_notes:
         return {"action": "new", "similar_file": "", "new_info": ""}
 
-    notes_text = ""
-    for n in existing_notes:
-        notes_text += f"- File: {n['filename']}\n  Title: {n['title']}\n  Preview: {n['preview'][:150]}\n\n"
+    candidates = _shortlist_candidates(new_title, new_content, existing_notes, top_n=15)
+    if not candidates:
+        return {"action": "new", "similar_file": "", "new_info": ""}
 
-    if len(notes_text) > 3000:
-        notes_text = notes_text[:3000] + "\n...(truncated)"
+    notes_text = ""
+    for n in candidates:
+        category = n.get("category", "")
+        cat_tag = f" [{category}]" if category else ""
+        notes_text += f"- File: {n['filename']}{cat_tag}\n  Title: {n['title']}\n  Preview: {n['preview'][:200]}\n\n"
 
     new_preview = new_content[:500] if len(new_content) > 500 else new_content
 

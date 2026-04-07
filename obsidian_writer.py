@@ -41,48 +41,65 @@ def is_url_duplicate(url: str) -> bool:
 
 
 def get_existing_notes_summary() -> list[dict]:
-    """옵시디언 텔레그램 폴더 내 모든 노트의 제목 + 핵심 내용을 수집한다."""
+    """옵시디언 텔레그램 폴더(서브폴더 포함)의 모든 노트 제목·미리보기를 수집한다.
+
+    호아가 새 노트를 카테고리별 서브폴더(예: 'AI 에이전트/', '코딩/')로
+    수동 이동하기 때문에, 1단계 listdir로는 80% 이상 노트를 놓친다.
+    os.walk로 재귀 스캔하되 _archive, attachments, 숨김 폴더는 제외.
+    """
     folder_path = os.path.join(OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER)
     notes = []
     if not os.path.exists(folder_path):
         return notes
-    for f in sorted(os.listdir(folder_path)):
-        if not f.endswith(".md"):
-            continue
-        try:
-            filepath = os.path.join(folder_path, f)
-            with open(filepath, "r", encoding="utf-8") as fh:
-                content = fh.read()
 
-            # 프론트매터에서 URL 추출
-            url = ""
-            url_match = re.search(r'url:\s*"(.+?)"', content)
-            if url_match:
-                url = url_match.group(1)
+    # 비교에서 제외할 디렉토리
+    SKIP_DIRS = {"_archive", "attachments", ".obsidian", ".trash", "_templates"}
 
-            # 프론트매터 이후 본문
-            parts = content.split("---")
-            body = "---".join(parts[2:]).strip() if len(parts) >= 3 else content
+    for root, dirs, files in os.walk(folder_path):
+        # 제외 디렉토리 가지치기 (in-place)
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+        # 카테고리(상대경로) — 후처리에 도움
+        rel_dir = os.path.relpath(root, folder_path)
+        category = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
 
-            # 제목 추출
-            title = f.replace(".md", "")
-            title_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
-            if title_match:
-                title = title_match.group(1).strip()
+        for f in sorted(files):
+            if not f.endswith(".md"):
+                continue
+            try:
+                filepath = os.path.join(root, f)
+                with open(filepath, "r", encoding="utf-8") as fh:
+                    content = fh.read()
 
-            # 본문 앞부분 (평가 섹션 제외)
-            body_preview = body.split("## 평가")[0].strip()[:300]
+                # 프론트매터에서 URL 추출
+                url = ""
+                url_match = re.search(r'url:\s*"(.+?)"', content)
+                if url_match:
+                    url = url_match.group(1)
 
-            notes.append({
-                "filename": f,
-                "filepath": filepath,
-                "title": title,
-                "url": url,
-                "preview": body_preview,
-            })
-        except Exception as e:
-            logger.warning(f"노트 요약 읽기 실패: {f} - {e}")
-            continue
+                # 프론트매터 이후 본문
+                parts = content.split("---")
+                body = "---".join(parts[2:]).strip() if len(parts) >= 3 else content
+
+                # 제목 추출
+                title = f.replace(".md", "")
+                title_match = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
+                if title_match:
+                    title = title_match.group(1).strip()
+
+                # 본문 앞부분 (평가 섹션 제외)
+                body_preview = body.split("## 평가")[0].strip()[:300]
+
+                notes.append({
+                    "filename": f,
+                    "filepath": filepath,
+                    "title": title,
+                    "url": url,
+                    "preview": body_preview,
+                    "category": category,
+                })
+            except Exception as e:
+                logger.warning(f"노트 요약 읽기 실패: {f} - {e}")
+                continue
     return notes
 
 
