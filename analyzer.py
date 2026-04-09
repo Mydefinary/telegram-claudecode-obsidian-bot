@@ -218,12 +218,13 @@ async def _run_claude(prompt: str, allowed_tools: str | None = "WebFetch,WebSear
 # ── Dedup ──
 
 def _shortlist_candidates(new_title: str, new_content: str, existing_notes: list[dict], top_n: int = 15) -> list[dict]:
-    """LLM에 보내기 전에 제목/키워드 유사도로 후보를 좁힌다.
+    """LLM에 보내기 전에 제목/키워드/본문 유사도로 후보를 좁힌다.
 
     벡터 임베딩을 쓰지 않고도 빠르게 노이즈를 걸러내는 휴리스틱:
     - 제목 SequenceMatcher 비율
-    - 새 내용의 1차 토큰들과 노트 미리보기의 토큰 교집합
-    두 점수의 가중합 상위 N개만 반환.
+    - 키워드 직접 겹침 (가장 강력)
+    - 본문 토큰 교집합
+    가중합 상위 N개만 반환.
     """
     from difflib import SequenceMatcher
     import re as _re
@@ -232,18 +233,31 @@ def _shortlist_candidates(new_title: str, new_content: str, existing_notes: list
         # 한글/영문 단어 단위
         return {t for t in _re.findall(r"[\w가-힣]{2,}", s.lower()) if len(t) >= 2}
 
+    def _extract_kw(s: str) -> set[str]:
+        m = _re.search(r'###\s*(?:키워드|Keywords)\s*\n(.*?)(?:\n###|\n---|\Z)', s, _re.DOTALL)
+        if not m:
+            return set()
+        return {t.lower() for t in _re.findall(r'#([\w가-힣-]+)', m.group(1)) if len(t) > 1}
+
     new_title_lc = new_title.lower()
-    new_tokens = _tokenise(new_title + " " + new_content[:500])
+    new_tokens = _tokenise(new_title + " " + new_content[:1000])
+    new_keywords = _extract_kw(new_content)
     if not new_tokens:
         return existing_notes[:top_n]
 
     scored = []
     for n in existing_notes:
         title_sim = SequenceMatcher(None, new_title_lc, n["title"].lower()).ratio()
-        n_tokens = _tokenise(n["title"] + " " + n.get("preview", ""))
+        n_text = n["title"] + " " + (n.get("body_text") or n.get("preview", ""))
+        n_tokens = _tokenise(n_text)
         overlap = len(new_tokens & n_tokens) / max(len(new_tokens), 1)
-        score = title_sim * 0.6 + overlap * 0.4
-        if score > 0.1:  # 명백히 무관한 것 제외
+
+        # 키워드 직접 겹침 (강력한 시그널)
+        n_keywords = set(k.lower() for k in n.get("keywords", []))
+        kw_overlap = len(new_keywords & n_keywords) / max(len(new_keywords), 1) if new_keywords else 0
+
+        score = title_sim * 0.4 + overlap * 0.3 + kw_overlap * 0.3
+        if score > 0.08:  # 명백히 무관한 것 제외
             scored.append((score, n))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -270,9 +284,14 @@ async def check_duplicate_content(new_title: str, new_content: str, existing_not
     for n in candidates:
         category = n.get("category", "")
         cat_tag = f" [{category}]" if category else ""
-        notes_text += f"- File: {n['filename']}{cat_tag}\n  Title: {n['title']}\n  Preview: {n['preview'][:200]}\n\n"
+        # 키워드도 함께 전달하면 LLM이 주제 일치를 더 잘 판정
+        keywords = n.get("keywords", [])
+        kw_line = f"\n  Keywords: {', '.join(keywords[:8])}" if keywords else ""
+        # body_text가 있으면 우선 사용 (1500자), 없으면 preview (800자)
+        body = n.get("body_text") or n.get("preview", "")
+        notes_text += f"- File: {n['filename']}{cat_tag}\n  Title: {n['title']}{kw_line}\n  Preview: {body[:600]}\n\n"
 
-    new_preview = new_content[:500] if len(new_content) > 500 else new_content
+    new_preview = new_content[:1200] if len(new_content) > 1200 else new_content
 
     prompt = (
         f"{DEDUP_PROMPT}\n\n"

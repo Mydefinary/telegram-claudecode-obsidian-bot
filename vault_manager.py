@@ -54,8 +54,13 @@ def _extract_grade_and_score(content: str) -> tuple[str, int]:
 
 
 async def scan_vault_duplicates() -> list[dict]:
-    """볼트에서 제목 유사도가 높은 노트 쌍을 찾는다.
-    Returns: [{"note_a": dict, "note_b": dict, "similarity": float}]
+    """볼트에서 중복 의심 노트 쌍을 찾는다.
+
+    감지 기준 (둘 중 하나라도 충족):
+    - 제목 유사도(SequenceMatcher) > 0.6
+    - 키워드 Jaccard 유사도 > 0.5 (3개 이상 겹침)
+
+    Returns: [{"note_a": dict, "note_b": dict, "similarity": float, "reason": str}]
     """
     notes = get_existing_notes_summary()
     if len(notes) < 2:
@@ -65,12 +70,30 @@ async def scan_vault_duplicates() -> list[dict]:
     for i in range(len(notes)):
         for j in range(i + 1, len(notes)):
             a, b = notes[i], notes[j]
-            ratio = SequenceMatcher(None, a["title"].lower(), b["title"].lower()).ratio()
-            if ratio > 0.6:
+            title_ratio = SequenceMatcher(None, a["title"].lower(), b["title"].lower()).ratio()
+
+            a_kw = set(k.lower() for k in a.get("keywords", []))
+            b_kw = set(k.lower() for k in b.get("keywords", []))
+            kw_jaccard = 0.0
+            kw_overlap = 0
+            if a_kw and b_kw:
+                kw_overlap = len(a_kw & b_kw)
+                kw_jaccard = kw_overlap / len(a_kw | b_kw)
+
+            # 후보 판정
+            if title_ratio > 0.6:
                 pairs.append({
                     "note_a": a,
                     "note_b": b,
-                    "similarity": round(ratio, 2),
+                    "similarity": round(title_ratio, 2),
+                    "reason": f"제목 유사 {title_ratio:.2f}",
+                })
+            elif kw_jaccard > 0.5 and kw_overlap >= 3:
+                pairs.append({
+                    "note_a": a,
+                    "note_b": b,
+                    "similarity": round(kw_jaccard, 2),
+                    "reason": f"키워드 {kw_overlap}개 일치 ({kw_jaccard:.2f})",
                 })
 
     pairs.sort(key=lambda x: x["similarity"], reverse=True)
@@ -78,44 +101,69 @@ async def scan_vault_duplicates() -> list[dict]:
     return pairs
 
 
-async def scan_and_merge_duplicates() -> dict:
+async def scan_and_merge_duplicates(max_pairs: int = 0) -> dict:
     """중복 스캔 후 AI로 확인하여 통합한다.
-    Returns: {"scanned": int, "merged": int, "details": [str]}
+    Args:
+        max_pairs: 처리할 최대 쌍 수 (0=무제한). 유사도 높은 순서로 처리.
+    Returns: {"scanned": int, "merged": int, "skipped": int, "details": [str]}
     """
     from analyzer import check_duplicate_content
 
     pairs = await scan_vault_duplicates()
-    result = {"scanned": len(pairs), "merged": 0, "details": []}
+    if max_pairs > 0:
+        pairs = pairs[:max_pairs]
 
-    for pair in pairs:
+    result = {"scanned": len(pairs), "merged": 0, "skipped": 0, "details": []}
+    archived_paths: set[str] = set()  # 이미 아카이브된 파일 추적
+
+    for idx, pair in enumerate(pairs, 1):
         a = pair["note_a"]
         b = pair["note_b"]
 
-        # AI로 중복 확인
-        a_content = _read_note_content(a["filepath"])
-        b_content = _read_note_content(b["filepath"])
-
-        if not a_content or not b_content:
+        # 이전 단계에서 이미 아카이브된 노트는 스킵
+        if a["filepath"] in archived_paths or b["filepath"] in archived_paths:
+            result["skipped"] += 1
             continue
 
-        # a를 기존, b를 신규로 비교
-        dedup = await check_duplicate_content(b["title"], b["preview"], [a])
+        # 파일 존재 재확인 (이전 단계에서 다른 쌍의 secondary로 이동했을 수 있음)
+        if not os.path.exists(a["filepath"]) or not os.path.exists(b["filepath"]):
+            result["skipped"] += 1
+            continue
+
+        a_content = _read_note_content(a["filepath"])
+        b_content = _read_note_content(b["filepath"])
+        if not a_content or not b_content:
+            result["skipped"] += 1
+            continue
+
+        try:
+            dedup = await check_duplicate_content(b["title"], b["preview"], [a])
+        except Exception as e:
+            logger.warning(f"중복 판정 실패: {a['filename']} <-> {b['filename']} - {e}")
+            result["skipped"] += 1
+            continue
 
         if dedup["action"] == "skip":
-            # 완전 중복 → b를 아카이브
             merge_duplicate_notes(a["filepath"], b["filepath"])
+            archived_paths.add(b["filepath"])
             result["merged"] += 1
-            result["details"].append(f"[통합] {b['filename']} → {a['filename']} (유사도: {pair['similarity']})")
+            result["details"].append(f"[통합] {b['filename']} → {a['filename']} ({pair['reason']})")
         elif dedup["action"] == "merge":
-            # 보강 → b의 고유 내용을 a에 추가 후 아카이브
             new_info = dedup.get("new_info", "")
             if new_info:
-                append_to_existing_note(a["filepath"], new_info)
+                try:
+                    append_to_existing_note(a["filepath"], new_info)
+                except Exception as e:
+                    logger.warning(f"보강 실패: {a['filename']} - {e}")
             merge_duplicate_notes(a["filepath"], b["filepath"])
+            archived_paths.add(b["filepath"])
             result["merged"] += 1
             result["details"].append(f"[보강통합] {b['filename']} → {a['filename']}")
 
-    logger.info(f"중복 통합 완료: {result['merged']}개 통합")
+        if idx % 10 == 0:
+            logger.info(f"진행: {idx}/{len(pairs)}, 통합 {result['merged']}, 스킵 {result['skipped']}")
+
+    logger.info(f"중복 통합 완료: {result['merged']}개 통합, {result['skipped']}개 스킵")
     return result
 
 
@@ -213,3 +261,134 @@ def cleanup_notes(candidates: list[dict]) -> dict:
 
     logger.info(f"정리 완료: {result['moved']}개 이동, {result['errors']}개 실패")
     return result
+
+
+# ── Karpathy LLM Wiki: 교차 참조 린팅 ──
+
+def lint_missing_links(min_score: int = 8, max_per_note: int = 3) -> list[dict]:
+    """볼트의 모든 노트를 스캔해 누락된 교차 참조를 찾는다.
+
+    각 노트에 대해 find_related_notes를 실행하고, 이미 ## 관련 노트 섹션에
+    링크되지 않은 것만 후보로 반환.
+
+    Returns: [{"filepath", "filename", "title", "missing": [{"filename","title","score"}]}]
+    """
+    from obsidian_writer import find_related_notes
+
+    notes = get_existing_notes_summary()
+    suggestions = []
+
+    for note in notes:
+        content = _read_note_content(note["filepath"])
+        if not content:
+            continue
+
+        # 이미 ## 관련 노트 섹션에 있는 링크 추출
+        existing_links = set()
+        related_match = re.search(r'## 관련 노트\n(.*?)(?:\n##|\n---|\Z)', content, re.DOTALL)
+        if related_match:
+            for link in re.findall(r'\[\[([^\]|]+)(?:\|[^\]]+)?\]\]', related_match.group(1)):
+                # 경로가 있을 경우 마지막 부분만 사용
+                existing_links.add(link.split("/")[-1].strip().lower())
+
+        # 관련 노트 찾기 (저장된 본문 사용)
+        related = find_related_notes(
+            note["title"],
+            content,
+            exclude_filename=note["filename"],
+        )
+
+        # 점수가 충분하고 아직 링크되지 않은 것만
+        missing = []
+        for r in related:
+            if r["score"] < min_score:
+                continue
+            if r["title"].lower() in existing_links:
+                continue
+            if r["filename"].replace(".md", "").lower() in existing_links:
+                continue
+            missing.append(r)
+            if len(missing) >= max_per_note:
+                break
+
+        if missing:
+            suggestions.append({
+                "filepath": note["filepath"],
+                "filename": note["filename"],
+                "title": note["title"],
+                "missing": missing,
+            })
+
+    logger.info(f"린팅 완료: {len(notes)}개 노트 스캔, {len(suggestions)}개 노트에 누락 링크 발견")
+    return suggestions
+
+
+def apply_lint_links(suggestions: list[dict]) -> dict:
+    """lint_missing_links()의 결과를 실제로 적용한다 (양방향 링크 자동 생성).
+    Returns: {"updated": int, "links_added": int}
+    """
+    from obsidian_writer import add_related_links
+
+    result = {"updated": 0, "links_added": 0}
+
+    for s in suggestions:
+        try:
+            # add_related_links는 ## 관련 노트 섹션이 있으면 스킵하므로,
+            # 직접 기존 섹션에 추가하는 방식으로 처리
+            content = _read_note_content(s["filepath"])
+            if not content:
+                continue
+
+            new_links = "\n".join(f"- [[{m['title']}]]" for m in s["missing"])
+
+            if "## 관련 노트" in content:
+                # 기존 섹션에 추가
+                content = content.replace(
+                    "## 관련 노트\n",
+                    f"## 관련 노트\n{new_links}\n",
+                    1,
+                )
+            else:
+                # 새 섹션 생성 (## 평가 앞)
+                section = f"\n\n## 관련 노트\n{new_links}\n"
+                if "## 평가" in content:
+                    content = content.replace("## 평가", f"{section}\n## 평가", 1)
+                else:
+                    content += section
+
+            with open(s["filepath"], "w", encoding="utf-8") as f:
+                f.write(content)
+
+            # 역방향 링크
+            add_related_links(s["filepath"], s["missing"])
+
+            result["updated"] += 1
+            result["links_added"] += len(s["missing"])
+        except Exception as e:
+            logger.error(f"린트 적용 실패: {s['filename']} - {e}")
+
+    logger.info(f"린트 적용 완료: {result['updated']}개 노트, {result['links_added']}개 링크 추가")
+    return result
+
+
+def find_orphan_notes() -> list[dict]:
+    """관련 노트 섹션이 없거나 비어있는 고립 노트를 찾는다.
+    Returns: [{"filename", "title", "filepath"}]
+    """
+    notes = get_existing_notes_summary()
+    orphans = []
+
+    for note in notes:
+        content = _read_note_content(note["filepath"])
+        if not content:
+            continue
+
+        related_match = re.search(r'## 관련 노트\n(.*?)(?:\n##|\n---|\Z)', content, re.DOTALL)
+        if not related_match or not re.search(r'\[\[[^\]]+\]\]', related_match.group(1)):
+            orphans.append({
+                "filename": note["filename"],
+                "title": note["title"],
+                "filepath": note["filepath"],
+            })
+
+    return orphans

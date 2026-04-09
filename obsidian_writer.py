@@ -41,11 +41,17 @@ def is_url_duplicate(url: str) -> bool:
 
 
 def get_existing_notes_summary() -> list[dict]:
-    """옵시디언 텔레그램 폴더(서브폴더 포함)의 모든 노트 제목·미리보기를 수집한다.
+    """옵시디언 텔레그램 폴더(서브폴더 포함)의 모든 노트 제목·미리보기·키워드를 수집한다.
 
     호아가 새 노트를 카테고리별 서브폴더(예: 'AI 에이전트/', '코딩/')로
     수동 이동하기 때문에, 1단계 listdir로는 80% 이상 노트를 놓친다.
     os.walk로 재귀 스캔하되 _archive, attachments, 숨김 폴더는 제외.
+
+    각 노트는 다음을 포함:
+    - filename, filepath, title, url, category
+    - preview: 평가 섹션 이전의 본문 800자
+    - keywords: ### 키워드 섹션에서 추출한 태그 리스트 (전체 본문 스캔)
+    - body_text: 평가/원본 제거된 순수 본문 1500자 (LLM dedup용)
     """
     folder_path = os.path.join(OBSIDIAN_VAULT_PATH, OBSIDIAN_FOLDER)
     notes = []
@@ -86,15 +92,24 @@ def get_existing_notes_summary() -> list[dict]:
                 if title_match:
                     title = title_match.group(1).strip()
 
-                # 본문 앞부분 (평가 섹션 제외)
-                body_preview = body.split("## 평가")[0].strip()[:300]
+                # 평가/원본 섹션 제거한 순수 본문
+                pure_body = body
+                for marker in ("## 평가", "> [!quote]- 원본 보기", "## 관련 노트"):
+                    pos = pure_body.find(marker)
+                    if pos != -1:
+                        pure_body = pure_body[:pos].strip()
+
+                # ### 키워드 섹션은 전체 본문에서 추출 (평가 이전이면 OK)
+                keywords = extract_keywords_from_content(body)
 
                 notes.append({
                     "filename": f,
                     "filepath": filepath,
                     "title": title,
                     "url": url,
-                    "preview": body_preview,
+                    "preview": pure_body[:800],
+                    "body_text": pure_body[:1500],
+                    "keywords": keywords,
                     "category": category,
                 })
             except Exception as e:
@@ -229,15 +244,49 @@ def extract_keywords_from_content(content: str) -> list[str]:
     return [t.lower() for t in tags if len(t) > 1]
 
 
+_KOREAN_STOPWORDS = {
+    "그리고", "그러나", "하지만", "또는", "그래서", "때문", "위해", "통해",
+    "이것", "저것", "그것", "있는", "없는", "되는", "하는", "위한", "있다", "없다",
+    "있어", "없어", "이다", "아니", "여기", "거기", "저기", "이런", "저런", "그런",
+    "정말", "매우", "아주", "조금", "많이", "거의", "더욱", "다시", "다른", "같은",
+}
+
+
+def _tokenize_for_matching(text: str) -> set[str]:
+    """한글/영문 매칭용 토큰 추출. 한글 2-4자 + 영문 2자+ 의미 단위로 분리."""
+    text = text.lower()
+    tokens = set()
+    # 한글 2자 이상 + 영문/숫자 2자 이상
+    for m in re.findall(r'[가-힣]{2,}|[a-z0-9_-]{2,}', text):
+        if m in _KOREAN_STOPWORDS:
+            continue
+        tokens.add(m)
+        # 한글 합성어 부분 매칭: "지식관리" -> "지식", "관리" 도 추가 (4자 이상 시)
+        if 4 <= len(m) <= 8 and re.fullmatch(r'[가-힣]+', m):
+            for i in range(0, len(m) - 1, 2):
+                sub = m[i:i+2]
+                if sub not in _KOREAN_STOPWORDS:
+                    tokens.add(sub)
+    return tokens
+
+
 def find_related_notes(title: str, content: str, exclude_filename: str = "") -> list[dict]:
-    """기존 노트와 제목+키워드 로컬 매칭으로 관련 노트를 찾는다. AI 호출 없음.
+    """기존 노트와 제목+키워드+본문 로컬 매칭으로 관련 노트를 찾는다. AI 호출 없음.
     Returns: [{"filename": str, "title": str, "score": int}] (상위 5개)
+
+    스코어 가중치:
+    - 키워드 겹침: 5점/개 (가장 강력한 시그널)
+    - 제목 SequenceMatcher 유사도: 0~5점
+    - 본문 토큰 겹침: 0~10점 (캡)
+    - 새 키워드가 기존 제목에 등장: 3점/개
+    - 기존 키워드가 새 본문에 등장: 2점/개
     """
     from difflib import SequenceMatcher
 
     existing = get_existing_notes_summary()
-    new_keywords = set(extract_keywords_from_content(content))
-    new_title_words = set(w.lower() for w in re.split(r'\s+', title) if len(w) > 1)
+    new_keywords = set(k.lower() for k in extract_keywords_from_content(content))
+    new_text = (title + " " + content).lower()
+    new_tokens = _tokenize_for_matching(new_text)
 
     scored = []
     for note in existing:
@@ -245,23 +294,38 @@ def find_related_notes(title: str, content: str, exclude_filename: str = "") -> 
             continue
 
         score = 0
+        note_keywords = set(k.lower() for k in note.get("keywords", []))
 
-        # 제목 단어 겹침
-        note_title_words = set(w.lower() for w in re.split(r'\s+', note["title"]) if len(w) > 1)
-        title_overlap = len(new_title_words & note_title_words)
-        score += title_overlap * 2
+        # 1. 키워드 직접 겹침 (가장 강력한 시그널)
+        kw_overlap = len(new_keywords & note_keywords)
+        score += kw_overlap * 5
 
-        # 키워드 겹침
-        note_keywords = set(extract_keywords_from_content(note.get("preview", "")))
-        keyword_overlap = len(new_keywords & note_keywords)
-        score += keyword_overlap * 3
+        # 2. 제목 유사도
+        note_title_lc = note["title"].lower()
+        ratio = SequenceMatcher(None, title.lower(), note_title_lc).ratio()
+        if ratio > 0.3:
+            score += int(ratio * 8)
 
-        # 제목 유사도 (SequenceMatcher)
-        ratio = SequenceMatcher(None, title.lower(), note["title"].lower()).ratio()
-        if ratio > 0.4:
-            score += int(ratio * 5)
+        # 3. 새 키워드가 기존 제목에 등장 (예: "LLM 위키" 키워드 → 기존 제목 "LLM 위키 패턴")
+        for kw in new_keywords:
+            if len(kw) > 2 and kw in note_title_lc:
+                score += 3
 
-        if score >= 2:
+        # 4. 기존 키워드가 새 본문에 등장
+        for kw in note_keywords:
+            if len(kw) > 2 and kw in new_text:
+                score += 2
+
+        # 5. 본문 토큰 겹침 (캡 10점)
+        note_tokens = _tokenize_for_matching(note.get("body_text", "") or note.get("preview", ""))
+        if note_tokens:
+            token_overlap = len(new_tokens & note_tokens)
+            # 비율로 정규화: 두 노트 모두 큰 경우 20% 이상이면 의미있음
+            denom = min(len(new_tokens), len(note_tokens)) or 1
+            ratio_score = token_overlap / denom
+            score += min(int(ratio_score * 20), 10)
+
+        if score >= 5:
             scored.append({"filename": note["filename"], "title": note["title"], "score": score})
 
     scored.sort(key=lambda x: x["score"], reverse=True)

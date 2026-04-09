@@ -894,7 +894,88 @@ async def handle_cleanup(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "  scan — 중복 의심 노트 스캔\n"
             "  merge — AI 확인 후 중복 통합\n"
             "  tidy — 저품질 노트 정리 대상 확인\n"
-            "  execute — 저품질 ��트 아카이브 실���"
+            "  execute — 저품질 노트 아카이브 실행"
+        )
+
+
+async def handle_lint(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/lint 명령: Karpathy LLM Wiki 스타일 — 누락된 교차 참조 검출/적용."""
+    if not _is_user_allowed(update):
+        return
+
+    from vault_manager import lint_missing_links, apply_lint_links, find_orphan_notes
+
+    args = context.args[0] if context.args else "scan"
+
+    if args == "scan":
+        await update.message.reply_text("볼트 교차 참조 린팅 중... (전체 노트 스캔)")
+        try:
+            suggestions = lint_missing_links(min_score=8, max_per_note=3)
+        except Exception as e:
+            logger.error(f"린팅 실패: {e}", exc_info=True)
+            await update.message.reply_text(f"[린팅 오류] {e}")
+            return
+
+        if not suggestions:
+            await update.message.reply_text("[린팅 완료] 누락된 교차 참조 없음 — 볼트가 잘 연결되어 있습니다.")
+            return
+
+        total_links = sum(len(s["missing"]) for s in suggestions)
+        msg = f"[린팅 완료] {len(suggestions)}개 노트에 {total_links}개 누락 링크 발견:\n\n"
+        for s in suggestions[:10]:
+            msg += f"📄 {s['title']}\n"
+            for m in s["missing"]:
+                msg += f"   ↳ [[{m['title']}]] (score: {m['score']})\n"
+            msg += "\n"
+        if len(suggestions) > 10:
+            msg += f"...외 {len(suggestions) - 10}개 노트\n\n"
+        msg += "`/lint apply`로 모든 링크를 일괄 적용"
+        # 텔레그램 4096자 제한
+        if len(msg) > 4000:
+            msg = msg[:4000] + "\n...(더 있음)"
+        await update.message.reply_text(msg)
+
+    elif args == "apply":
+        await update.message.reply_text("교차 참조 일괄 적용 중...")
+        try:
+            suggestions = lint_missing_links(min_score=8, max_per_note=3)
+            if not suggestions:
+                await update.message.reply_text("[적용] 적용할 링크 없음")
+                return
+            result = apply_lint_links(suggestions)
+            await update.message.reply_text(
+                f"[적용 완료] {result['updated']}개 노트에 {result['links_added']}개 링크 추가"
+            )
+        except Exception as e:
+            logger.error(f"린트 적용 실패: {e}", exc_info=True)
+            await update.message.reply_text(f"[적용 오류] {e}")
+
+    elif args == "orphan":
+        try:
+            orphans = find_orphan_notes()
+        except Exception as e:
+            logger.error(f"고립 노트 스캔 실패: {e}", exc_info=True)
+            await update.message.reply_text(f"[오류] {e}")
+            return
+
+        if not orphans:
+            await update.message.reply_text("[고립 노트] 모든 노트가 연결되어 있습니다.")
+            return
+
+        msg = f"[고립 노트] 관련 노트 섹션이 없는 노트 {len(orphans)}개:\n"
+        for o in orphans[:20]:
+            msg += f"- {o['title']}\n"
+        if len(orphans) > 20:
+            msg += f"...외 {len(orphans) - 20}개\n"
+        msg += "\n`/lint apply`로 자동 연결 시도"
+        await update.message.reply_text(msg)
+
+    else:
+        await update.message.reply_text(
+            "/lint 사용법 (Karpathy LLM Wiki):\n"
+            "  scan — 누락된 교차 참조 검출 (기본)\n"
+            "  apply — 검출된 링크 일괄 적용 (양방향)\n"
+            "  orphan — 관련 노트 섹션 없는 고립 노트 찾기"
         )
 
 
@@ -909,6 +990,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("merge", toggle_merge))
     app.add_handler(CommandHandler("cleanup", handle_cleanup))
+    app.add_handler(CommandHandler("lint", handle_lint))
     app.add_handler(CallbackQueryHandler(handle_tip_callback))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
